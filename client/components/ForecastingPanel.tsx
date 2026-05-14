@@ -32,53 +32,56 @@ export default function ForecastingPanel({ totalDemand }: { totalDemand: number 
   }, [totalDemand]);
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-5xl mx-auto mt-4">
-      
-      {/* Demand Forecasting Card */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 flex flex-col gap-4">
-        <div className="flex items-center gap-3 pb-3 border-b border-slate-100">
-          <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+    <div className="grid w-full grid-cols-1 gap-6 xl:grid-cols-[1.05fr_1fr]">
+      <div className="panel-shell flex min-h-[420px] flex-col gap-5 p-6">
+        <div className="flex items-center gap-3 border-b border-slate-200/70 pb-4">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-cyan-50 text-cyan-700">
             <TrendingUp size={20} />
           </div>
-          <h3 className="font-bold text-slate-800">AI Demand Forecast (24h)</h3>
+          <div>
+            <p className="eyebrow">Demand Model</p>
+            <h3 className="panel-title">AI demand forecast</h3>
+          </div>
           {loading && <Loader2 size={16} className="animate-spin text-slate-400 ml-auto" />}
         </div>
         
-        <div className="flex-1 flex flex-col items-center justify-center p-4">
+        <div className="flex flex-1 flex-col items-center justify-center rounded-[1.5rem] border border-slate-200/70 bg-white/62 p-6 text-center shadow-inner">
           {data ? (
             <div className="flex flex-col items-center text-center gap-2 animate-in fade-in zoom-in duration-500">
-              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Expected Peak Demand</span>
-              <div className="text-5xl font-black text-indigo-600 tracking-tighter">
-                {data.forecast_demand_lpm} <span className="text-2xl text-indigo-400 font-bold">L/m</span>
+              <span className="text-[10px] uppercase font-black text-slate-400 tracking-[0.18em]">Expected peak demand</span>
+              <div className="font-display text-6xl font-black tracking-tighter text-slate-950">
+                {data.forecast_demand_lpm} <span className="text-2xl font-bold text-cyan-600">L/m</span>
               </div>
-              <p className="text-sm text-slate-500 mt-2 bg-slate-50 px-4 py-2 border border-slate-100 rounded-lg">
+              <p className="mt-3 max-w-md rounded-2xl border border-cyan-100 bg-cyan-50/70 px-4 py-3 text-sm leading-6 text-slate-600">
                 Demand is expected to rise based on historical patterns and current network trends.
               </p>
             </div>
           ) : (
-             <span className="text-slate-400 text-sm">Generating forecasts...</span>
+             <span className="text-sm font-semibold text-slate-400">Generating forecasts...</span>
           )}
         </div>
       </div>
 
-      {/* Predictive Maintenance Card */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 flex flex-col gap-4">
-        <div className="flex items-center gap-3 pb-3 border-b border-slate-100">
-          <div className="p-2 bg-orange-50 text-orange-600 rounded-lg">
+      <div className="panel-shell flex min-h-[420px] flex-col gap-5 p-6">
+        <div className="flex items-center gap-3 border-b border-slate-200/70 pb-4">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-amber-50 text-amber-700">
             <CalendarCheck size={20} />
           </div>
-          <h3 className="font-bold text-slate-800">Predictive Maintenance</h3>
+          <div>
+            <p className="eyebrow">Maintenance</p>
+            <h3 className="panel-title">Predictive worklist</h3>
+          </div>
         </div>
         
-        <div className="flex-1 flex flex-col gap-3 overflow-y-auto">
+        <div className="flex flex-1 flex-col gap-3 overflow-y-auto">
           {data?.maintenance_suggestions ? (
             data.maintenance_suggestions.map((suggestion: any, idx: number) => (
-              <div key={idx} className="flex gap-3 p-3 bg-red-50/50 border border-red-100 rounded-xl hover:shadow-sm transition-shadow">
-                <AlertTriangle size={20} className="text-red-500 shrink-0 mt-0.5" />
+              <div key={idx} className="flex gap-3 rounded-2xl border border-rose-100 bg-rose-50/60 p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                <AlertTriangle size={20} className="mt-0.5 shrink-0 text-rose-600" />
                 <div className="flex flex-col gap-1 text-sm">
                    <div className="flex justify-between items-center">
                      <span className="font-bold text-slate-800 uppercase text-xs">{suggestion.house_id}</span>
-                     <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                     <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-black uppercase text-rose-700">
                        Urgency: {suggestion.urgency}
                      </span>
                    </div>
@@ -87,7 +90,7 @@ export default function ForecastingPanel({ totalDemand }: { totalDemand: number 
               </div>
             ))
           ) : (
-            <div className="flex justify-center items-center h-full text-sm text-slate-400">
+            <div className="flex h-full items-center justify-center rounded-[1.5rem] border border-dashed border-slate-200 bg-white/60 text-sm font-semibold text-slate-400">
               {loading ? "Analyzing wear patterns..." : "No maintenance suggestions at this time."}
             </div>
           )}

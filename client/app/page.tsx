@@ -1,49 +1,75 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSocket } from '../hooks/useSocket';
 import Map from '../components/Map';
 import { AssetSelection } from '../utils/types';
-import { 
-  Home, Activity, Map as MapIcon, Database, Filter, 
-  Search, AlertCircle, CheckCircle, BrainCircuit, Droplet, Loader2, Zap, Settings 
+import {
+  Activity,
+  AlertCircle,
+  BarChart3,
+  BrainCircuit,
+  CheckCircle,
+  Database,
+  Droplet,
+  Filter,
+  Gauge,
+  Home,
+  LayoutDashboard,
+  Loader2,
+  Map as MapIcon,
+  Search,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Waves,
+  Zap,
 } from 'lucide-react';
 import DigitalFootprint from '../components/DigitalFootprint';
 import AquaBot from '../components/AquaBot';
 import ForecastingPanel from '../components/ForecastingPanel';
 
+const tabConfig = [
+  { id: 'live', label: 'Live Grid', icon: Home },
+  { id: 'predict', label: 'Forecast', icon: Database },
+  { id: 'footprint', label: 'Footprint', icon: Activity },
+] as const;
+
 export default function ObservatoryDashboard() {
   const { network, readings, isConnected, isLoading } = useSocket();
   const [selectedAsset, setSelectedAsset] = useState<AssetSelection | null>(null);
   const [activeTab, setActiveTab] = useState<'live' | 'predict' | 'footprint'>('live');
-  
   const [isGenerating, setIsGenerating] = useState(false);
   const [insights, setInsights] = useState<any[]>([]);
 
   const currentReadings = useMemo(() => Object.values(readings || {}), [readings]);
-  const physicalNode = currentReadings.find(r => r.house_id === 'house_1'); 
-  
-  let totalSensors = currentReadings.length;
+  const physicalNode = currentReadings.find((r) => r.house_id === 'house_1');
+
   let healthyCount = 0;
   let anomalyCount = 0;
   let totalDemand = 0;
 
-  currentReadings.forEach(r => {
-    totalDemand += (r.flow_rate || 0);
-    if (r.status === 'Normal') healthyCount++;
-    else anomalyCount++;
+  currentReadings.forEach((reading) => {
+    totalDemand += reading.flow_rate || 0;
+    if (reading.status === 'Normal') healthyCount += 1;
+    else anomalyCount += 1;
   });
 
+  const totalSensors = currentReadings.length;
   const healthyPercent = totalSensors > 0 ? Math.round((healthyCount / totalSensors) * 100) : 100;
   const anomalyPercent = totalSensors > 0 ? Math.round((anomalyCount / totalSensors) * 100) : 0;
+  const averagePressure =
+    totalSensors > 0
+      ? currentReadings.reduce((sum, reading) => sum + (reading.pressure || 0), 0) / totalSensors
+      : 0;
 
   useEffect(() => {
     if (!network?.zones.length) return;
     if (!selectedAsset) {
       setSelectedAsset({ type: 'tank', id: network.zones[0].tank.id });
     }
-  }, [network]);
+  }, [network, selectedAsset]);
 
   const generateInsights = async () => {
     setIsGenerating(true);
@@ -54,15 +80,15 @@ export default function ObservatoryDashboard() {
         body: JSON.stringify({
           physicalNode,
           totalDemand,
-          anomalyCount
-        })
+          anomalyCount,
+        }),
       });
       const data = await res.json();
       if (Array.isArray(data)) {
-         setInsights(data);
+        setInsights(data);
       }
-    } catch (e) {
-      console.error(e);
+    } catch (error) {
+      console.error(error);
     } finally {
       setIsGenerating(false);
     }
@@ -70,10 +96,11 @@ export default function ObservatoryDashboard() {
 
   if (isLoading || !network) {
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-50 text-slate-800">
-        <div className="text-center">
-          <Loader2 className="mx-auto h-8 w-8 animate-spin text-blue-500 mb-4" />
-          <h1 className="text-xl font-bold">Initializing Observatory...</h1>
+      <div className="flex h-screen items-center justify-center bg-[#eef7f5] text-slate-900">
+        <div className="rounded-[2rem] border border-white/70 bg-white/80 px-8 py-7 text-center shadow-[0_28px_90px_rgba(15,23,42,0.16)] backdrop-blur">
+          <Loader2 className="mx-auto mb-4 h-9 w-9 animate-spin text-cyan-600" />
+          <h1 className="text-xl font-bold tracking-tight">Bringing FlowIntel online</h1>
+          <p className="mt-2 text-sm text-slate-500">Syncing live telemetry, maps, and sensor health.</p>
         </div>
       </div>
     );
@@ -83,242 +110,336 @@ export default function ObservatoryDashboard() {
   const allNodes = activeZone.houses;
 
   return (
-    <div className="flex h-screen bg-[#f8f9fa] text-slate-800 font-sans overflow-hidden">
-      {/* Sidebar Navigation */}
-      <nav className="w-16 bg-white border-r border-slate-200 flex flex-col items-center py-6 gap-8 shadow-sm z-20 shrink-0">
-        <div className="w-8 h-8 rounded bg-blue-600 shadow-md"></div>
-        <div className="flex flex-col gap-6 text-slate-400">
-          <button onClick={() => setActiveTab('live')} className={`p-2 rounded-lg cursor-pointer transition-colors ${activeTab === 'live' ? 'text-blue-600 bg-blue-50' : 'hover:text-slate-600 hover:bg-slate-50'}`}><Home size={20}/></button>
-          <button onClick={() => setActiveTab('predict')} className={`p-2 rounded-lg cursor-pointer transition-colors ${activeTab === 'predict' ? 'text-blue-600 bg-blue-50' : 'hover:text-slate-600 hover:bg-slate-50'}`}><Database size={20}/></button>
-          <button onClick={() => setActiveTab('footprint')} className={`p-2 rounded-lg cursor-pointer transition-colors ${activeTab === 'footprint' ? 'text-blue-600 bg-blue-50' : 'hover:text-slate-600 hover:bg-slate-50'}`}><Activity size={20}/></button>
+    <div className="relative flex h-screen overflow-hidden bg-[radial-gradient(circle_at_20%_10%,rgba(20,184,166,0.16),transparent_28%),linear-gradient(135deg,#f7fbfb_0%,#eef7f5_48%,#f8fafc_100%)] text-slate-900">
+      <nav className="z-30 hidden w-[88px] shrink-0 flex-col items-center border-r border-white/70 bg-white/62 px-4 py-6 shadow-[12px_0_45px_rgba(15,23,42,0.08)] backdrop-blur-2xl lg:flex">
+        <div className="flex h-13 w-13 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_18px_35px_rgba(15,23,42,0.28)]">
+          <Waves size={25} />
+        </div>
+
+        <div className="mt-9 flex flex-col gap-3">
+          {tabConfig.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                title={tab.label}
+                className={`group grid h-12 w-12 place-items-center rounded-2xl border transition-all ${
+                  isActive
+                    ? 'border-slate-950 bg-slate-950 text-white shadow-[0_16px_30px_rgba(15,23,42,0.25)]'
+                    : 'border-white/70 bg-white/70 text-slate-500 hover:border-cyan-200 hover:text-cyan-700 hover:shadow-md'
+                }`}
+              >
+                <Icon size={20} />
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-auto grid h-12 w-12 place-items-center rounded-2xl border border-emerald-200 bg-emerald-50 text-emerald-700">
+          <ShieldCheck size={20} />
         </div>
       </nav>
 
-      {/* Main Container */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <div className="p-6 md:p-8 max-w-[1600px] w-full flex-1 flex flex-col gap-6 overflow-y-auto">
-          
-          {/* Header */}
-          <header className="flex flex-col gap-5 shrink-0">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl lg:text-3xl font-semibold text-slate-800 tracking-tight">L'observatoire de l'eau (Smart Indore)</h1>
-              <div className="flex items-center gap-3">
-                <Link
-                  href="/ai-analysis"
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 shadow-sm transition-colors"
-                >
-                  <BrainCircuit size={16} /> AI Analyst
-                </Link>
-                <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium hover:bg-slate-50 shadow-sm transition-colors text-blue-600">
-                  <Settings size={16} /> Personnaliser l'affichage
-                </button>
-              </div>
-            </div>
-            
-            {/* Stat Badges */}
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="flex items-center gap-3 bg-white px-4 py-2.5 rounded-xl border border-slate-200 shadow-sm">
-                <div className="w-2.5 h-2.5 rounded-sm bg-amber-500"></div>
-                <span className="text-sm text-slate-500"><strong className="text-slate-900">{activeZone.houses.length}</strong> stations disponibles</span>
-              </div>
-              <div className="flex items-center gap-3 bg-red-50/50 px-4 py-2.5 rounded-xl border border-red-100 shadow-sm">
-                <AlertCircle size={16} className="text-red-500" />
-                <span className="text-sm text-slate-500 flex flex-col justify-center leading-tight">
-                  <strong className="text-red-700">{anomalyCount}</strong> 
-                  <span className="text-[10px] uppercase tracking-wider font-bold">Stations en alerte</span>
-                </span>
-              </div>
-              <div className="flex items-center gap-3 bg-amber-50/50 px-4 py-2.5 rounded-xl border border-amber-100 shadow-sm">
-                <AlertCircle size={16} className="text-amber-500" />
-                <span className="text-sm text-slate-500 flex flex-col justify-center leading-tight">
-                  <strong className="text-amber-700">0</strong> 
-                  <span className="text-[10px] uppercase tracking-wider font-bold">Stations en vigilance</span>
-                </span>
-              </div>
-              <div className="flex items-center gap-3 bg-green-50/50 px-4 py-2.5 rounded-xl border border-green-100 shadow-sm">
-                <CheckCircle size={16} className="text-green-500" />
-                <span className="text-sm text-slate-500 flex flex-col justify-center leading-tight">
-                  <strong className="text-green-700">{healthyCount}</strong> 
-                  <span className="text-[10px] uppercase tracking-wider font-bold">Stations en Ã©tat normal</span>
-                </span>
-              </div>
-              
-              <div className="flex items-center gap-3 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 shadow-sm ml-auto">
-                 <span className="text-xs uppercase font-bold text-slate-400 tracking-wider">Connexion:</span>
-                 <div className={`w-2.5 h-2.5 rounded-full shadow-sm ${isConnected ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500 shadow-[0_0_8px_#ef4444]'}`} />
-              </div>
-            </div>
-            
-            {/* Filters Row */}
-            <div className="flex items-center gap-4 mt-1">
-              <div className="flex items-center bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm h-10">
-                <button className="px-4 py-2 text-sm font-medium border-r border-slate-200 hover:bg-slate-50 bg-slate-50/50 flex items-center gap-2 text-slate-700">Filtrer <Filter size={12}/></button>
-                <div className="flex items-center px-3 gap-2 w-full sm:w-64 bg-white">
-                  <Search size={16} className="text-slate-400" />
-                  <input type="text" placeholder="Rechercher..." className="bg-transparent border-none outline-none text-sm w-full" />
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8">
+          <div className="mx-auto flex w-full max-w-[1660px] flex-col gap-6 pb-10">
+            <header className="relative overflow-hidden rounded-[2rem] border border-white/75 bg-white/70 p-5 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-2xl sm:p-6">
+              <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-cyan-400 via-emerald-400 to-amber-300" />
+              <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+                <div className="max-w-3xl">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-2 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] text-cyan-700">
+                      <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                      {isConnected ? 'Telemetry live' : 'Socket offline'}
+                    </span>
+                    <span className="rounded-full border border-slate-200 bg-white/80 px-3 py-1 text-xs font-semibold text-slate-500">
+                      Smart Indore Water Grid
+                    </span>
+                  </div>
+                  <h1 className="font-display text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl lg:text-5xl">
+                    FlowIntel Command Center
+                  </h1>
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base">
+                    A polished live operations surface for distribution health, demand, leak signals, and AI-guided
+                    intervention across the municipal water network.
+                  </p>
                 </div>
-              </div>
-            </div>
-          </header>
 
-          {/* Master Grid Area */}
-          {activeTab === 'live' && (
-          <div className="grid grid-cols-1 xl:grid-cols-[1fr_450px] gap-6 flex-1 min-h-[600px] pb-6">
-            
-            {/* Left Column (Map & AI) */}
-            <div className="flex flex-col gap-6 h-full min-h-0">
-              
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-[60%] min-h-[350px] overflow-hidden">
-                <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-white z-10 shrink-0">
-                  <h3 className="font-semibold text-slate-800 text-sm">Carte des stations</h3>
-                  <span className="text-xs text-blue-600 font-medium cursor-pointer hover:underline">Tout voir</span>
-                </div>
-                <div className="flex-1 relative bg-slate-100/50">
-                  <Map
-                    zone={activeZone}
-                    readings={readings}
-                    selectedAsset={selectedAsset}
-                    onSelectAsset={setSelectedAsset}
-                  />
-                </div>
-              </div>
-
-              {/* AI Insights replacing "Dernieres actus" */}
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex-1 flex flex-col min-h-[220px]">
-                <div className="flex items-center justify-between p-4 border-b border-slate-100 shrink-0">
-                  <h3 className="font-semibold text-slate-800 text-sm flex items-center gap-2">
-                    DerniÃ¨res analyses (OpenAI)
-                  </h3>
-                  <button 
-                    onClick={generateInsights}
-                    disabled={isGenerating}
-                    className="text-xs font-semibold bg-purple-50 hover:bg-purple-100 text-purple-700 px-3 py-1.5 rounded-lg border border-purple-200 transition-colors flex items-center gap-2 disabled:opacity-50 shadow-sm"
+                <div className="flex flex-wrap items-center gap-3">
+                  <Link
+                    href="/ai-analysis"
+                    className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-bold text-white shadow-[0_18px_40px_rgba(15,23,42,0.24)] transition hover:-translate-y-0.5 hover:bg-slate-800"
                   >
-                    {isGenerating ? <Loader2 size={12} className="animate-spin text-purple-700" /> : <Zap size={12} className="text-purple-600" />}
-                    GÃ©nÃ©rer des Insights
+                    <BrainCircuit size={17} /> AI Analyst
+                  </Link>
+                  <button className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm font-bold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-200 hover:text-cyan-700">
+                    <Settings size={17} /> Customize
                   </button>
                 </div>
-                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto">
-                  {insights.length > 0 ? (
-                    insights.map((insight, idx) => (
-                      <div key={idx} className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col gap-2 hover:border-blue-300 hover:shadow-md transition-all shadow-sm">
-                        <div className="flex items-center gap-2 text-slate-700">
-                          {insight.icon === 'BrainCircuit' ? <BrainCircuit size={16} className="text-purple-500" /> : insight.icon === 'AlertTriangle' ? <AlertCircle size={16} className="text-red-500" /> : <Droplet size={16} className="text-blue-500" />}
-                          <h4 className="font-bold text-sm leading-snug">{insight.title}</h4>
-                        </div>
-                        <p className="text-xs text-slate-500 leading-relaxed">{insight.description}</p>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="col-span-full flex flex-col items-center justify-center text-slate-400 h-full py-8 gap-3">
-                      <BrainCircuit size={32} className="opacity-20 text-slate-600" />
-                      <p className="text-sm">Cliquez sur gÃ©nÃ©rer pour analyser les flux en temps rÃ©el par l'IA.</p>
-                    </div>
-                  )}
+              </div>
+
+              <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="stat-tile">
+                  <div className="stat-icon bg-cyan-50 text-cyan-700">
+                    <LayoutDashboard size={18} />
+                  </div>
+                  <div>
+                    <p className="stat-label">Stations</p>
+                    <strong className="stat-value">{activeZone.houses.length}</strong>
+                  </div>
+                </div>
+                <div className="stat-tile">
+                  <div className="stat-icon bg-emerald-50 text-emerald-700">
+                    <CheckCircle size={18} />
+                  </div>
+                  <div>
+                    <p className="stat-label">Healthy</p>
+                    <strong className="stat-value">{healthyCount}</strong>
+                  </div>
+                </div>
+                <div className="stat-tile">
+                  <div className="stat-icon bg-rose-50 text-rose-700">
+                    <AlertCircle size={18} />
+                  </div>
+                  <div>
+                    <p className="stat-label">Alerts</p>
+                    <strong className="stat-value">{anomalyCount}</strong>
+                  </div>
+                </div>
+                <div className="stat-tile">
+                  <div className="stat-icon bg-amber-50 text-amber-700">
+                    <Gauge size={18} />
+                  </div>
+                  <div>
+                    <p className="stat-label">Avg Pressure</p>
+                    <strong className="stat-value">{averagePressure.toFixed(1)} kPa</strong>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Right Column (List & Donut) */}
-            <div className="flex flex-col gap-6 h-full min-h-0">
-              
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-[60%] min-h-[350px]">
-                <div className="flex items-center justify-between p-4 border-b border-slate-100 shrink-0">
-                  <div className="flex items-center gap-4 text-xs font-semibold text-slate-500">
-                    <span className="text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 cursor-pointer">Stations en alerte</span>
-                    <span className="hover:text-slate-800 cursor-pointer px-2">Stations favorites</span>
-                  </div>
-                  <span className="text-xs text-blue-600 font-medium cursor-pointer hover:underline">Tout voir</span>
-                </div>
-                
-                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-                  <p className="text-[10px] uppercase text-slate-400 font-bold mb-1 flex items-center gap-2">
-                    <Activity size={12} className={isConnected ? "text-green-500" : "text-red-500"} /> Flux de TÃ©lÃ©mÃ©trie en Direct
-                  </p>
-                  
-                  {allNodes.map(node => {
-                    const reading = readings[node.id];
-                    const isRealTime = node.id === 'house_1'; // Our designated physical Arduino node
-                    const statusClass = reading?.status === 'Normal' ? 'text-green-600 bg-green-50 border-green-100' : 'text-red-600 bg-red-50 border-red-100';
-                    
+              <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="inline-flex rounded-2xl border border-slate-200 bg-white/82 p-1 shadow-sm">
+                  {tabConfig.map((tab) => {
+                    const Icon = tab.icon;
+                    const isActive = activeTab === tab.id;
                     return (
-                      <div 
-                        key={node.id} 
-                        onClick={() => setSelectedAsset({ type: 'house', id: node.id })}
-                        className={`flex items-start justify-between p-3 rounded-xl border transition-all cursor-pointer shadow-sm hover:shadow-md ${selectedAsset?.id === node.id ? 'border-blue-300 bg-blue-50/20' : 'border-slate-100 bg-white'}`}
+                      <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold transition sm:px-4 ${
+                          isActive ? 'bg-slate-950 text-white shadow-md' : 'text-slate-500 hover:text-slate-900'
+                        }`}
                       >
-                        <div className="flex gap-3">
-                           <div className={`mt-0.5 flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-white ${isRealTime ? 'bg-indigo-500 shadow-[0_0_12px_rgba(99,102,241,0.5)]' : reading?.status === 'Normal' ? 'bg-slate-300' : 'bg-red-400'}`}>
-                             <MapIcon size={14} />
-                           </div>
-                           <div className="flex flex-col">
-                             <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-                               {node.name}
-                               {isRealTime && <span className="px-1.5 py-0.5 rounded bg-indigo-100 border border-indigo-200 text-indigo-700 text-[9px] uppercase tracking-wider font-bold">Hardware</span>}
-                             </h4>
-                             <p className="text-[11px] text-slate-500">{node.label} â€¢ {reading?.pressure ? reading.pressure.toFixed(1) + ' kPa' : '---'}</p>
-                           </div>
-                        </div>
-                        
-                        <div className="flex flex-col items-end gap-1.5">
-                           <span className={`text-[9px] uppercase tracking-wider font-bold px-2 py-0.5 rounded border ${statusClass}`}>
-                             {reading?.status || 'Hors Ligne'}
-                           </span>
-                           <span className="text-sm font-bold text-slate-800 font-mono tracking-tight">{reading?.flow_rate?.toFixed(1) || '0.0'} L/m</span>
-                        </div>
-                      </div>
+                        <Icon size={16} />
+                        {tab.label}
+                      </button>
                     );
                   })}
                 </div>
-              </div>
 
-              {/* Pie Chart Panel (Matches "Niveaux d'alerte") */}
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col flex-1 min-h-[220px]">
-                <div className="flex items-center justify-between p-4 border-b border-slate-100 shrink-0">
-                  <h3 className="font-semibold text-slate-800 text-sm">Niveaux d'alerte</h3>
-                  <span className="text-xs text-blue-600 font-medium cursor-pointer hover:underline">Tout voir</span>
+                <div className="flex min-w-0 items-center gap-2 rounded-2xl border border-slate-200 bg-white/82 px-3 py-2 shadow-sm md:w-[360px]">
+                  <Filter size={16} className="text-cyan-600" />
+                  <Search size={16} className="text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search station, pipe, or alert..."
+                    className="min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-700 outline-none placeholder:text-slate-400"
+                  />
                 </div>
-                <div className="flex-1 flex flex-row items-center justify-center gap-8 p-6">
-                  
-                  <div className="relative w-36 h-36 rounded-full flex items-center justify-center shrink-0" style={{ background: `conic-gradient(#ef4444 0% ${anomalyPercent}%, #10b981 ${anomalyPercent}% ${anomalyPercent + healthyPercent}%, #f1f5f9 ${anomalyPercent + healthyPercent}% 100%)` }}>
-                    <div className="w-24 h-24 rounded-full bg-white flex items-center justify-center shadow-inner">
-                      <div className="flex flex-col items-center">
-                        <span className="text-2xl font-bold text-slate-800 tracking-tight">{healthyPercent}%</span>
-                        <span className="text-[9px] uppercase tracking-wider text-slate-400 font-bold">SÃ©curisÃ©</span>
+              </div>
+            </header>
+
+            {activeTab === 'live' && (
+              <div className="grid min-h-[680px] grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_430px]">
+                <div className="flex min-h-0 flex-col gap-6">
+                  <section className="panel-shell flex h-[62vh] min-h-[420px] flex-col overflow-hidden">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">Geospatial Network</p>
+                        <h2 className="panel-title">Live station map</h2>
+                      </div>
+                      <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-bold text-cyan-700">
+                        {activeZone.name}
+                      </span>
+                    </div>
+                    <div className="relative min-h-0 flex-1 overflow-hidden bg-slate-100">
+                      <Map
+                        zone={activeZone}
+                        readings={readings}
+                        selectedAsset={selectedAsset}
+                        onSelectAsset={setSelectedAsset}
+                      />
+                    </div>
+                  </section>
+
+                  <section className="panel-shell min-h-[240px]">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">OpenAI Intelligence</p>
+                        <h2 className="panel-title">Operational insights</h2>
+                      </div>
+                      <button
+                        onClick={generateInsights}
+                        disabled={isGenerating}
+                        className="inline-flex items-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-bold text-teal-800 shadow-sm transition hover:border-teal-300 hover:bg-teal-100 disabled:opacity-50"
+                      >
+                        {isGenerating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                        Generate
+                      </button>
+                    </div>
+
+                    <div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3">
+                      {insights.length > 0 ? (
+                        insights.map((insight, idx) => (
+                          <article key={idx} className="insight-card">
+                            <div className="flex items-center gap-2 text-slate-800">
+                              {insight.icon === 'BrainCircuit' ? (
+                                <BrainCircuit size={17} className="text-cyan-600" />
+                              ) : insight.icon === 'AlertTriangle' ? (
+                                <AlertCircle size={17} className="text-rose-600" />
+                              ) : (
+                                <Droplet size={17} className="text-teal-600" />
+                              )}
+                              <h3 className="text-sm font-black leading-snug">{insight.title}</h3>
+                            </div>
+                            <p className="text-xs leading-6 text-slate-500">{insight.description}</p>
+                          </article>
+                        ))
+                      ) : (
+                        <div className="col-span-full grid min-h-[130px] place-items-center rounded-2xl border border-dashed border-slate-200 bg-white/60 p-6 text-center">
+                          <div>
+                            <BrainCircuit className="mx-auto mb-3 text-slate-300" size={34} />
+                            <p className="text-sm font-semibold text-slate-500">
+                              Generate AI guidance from the latest flow, pressure, and alert patterns.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                </div>
+
+                <aside className="flex min-h-0 flex-col gap-6">
+                  <section className="panel-shell flex min-h-[420px] flex-1 flex-col overflow-hidden">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">Telemetry Stream</p>
+                        <h2 className="panel-title">Stations</h2>
+                      </div>
+                      <span className="text-xs font-bold text-slate-400">{allNodes.length} endpoints</span>
+                    </div>
+
+                    <div className="flex-1 space-y-3 overflow-y-auto p-4">
+                      {allNodes.map((node) => {
+                        const reading = readings[node.id];
+                        const isRealTime = node.id === 'house_1';
+                        const isNormal = reading?.status === 'Normal';
+                        const isSelected = selectedAsset?.id === node.id;
+
+                        return (
+                          <button
+                            key={node.id}
+                            onClick={() => setSelectedAsset({ type: 'house', id: node.id })}
+                            className={`station-row ${isSelected ? 'station-row-active' : ''}`}
+                          >
+                            <div className="flex min-w-0 gap-3">
+                              <div
+                                className={`grid h-10 w-10 shrink-0 place-items-center rounded-2xl text-white shadow-sm ${
+                                  isRealTime ? 'bg-slate-950' : isNormal ? 'bg-emerald-500' : 'bg-rose-500'
+                                }`}
+                              >
+                                <MapIcon size={17} />
+                              </div>
+                              <div className="min-w-0 text-left">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h3 className="truncate text-sm font-black text-slate-900">{node.name}</h3>
+                                  {isRealTime && (
+                                    <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-cyan-700">
+                                      Hardware
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {node.label} | {reading?.pressure ? `${reading.pressure.toFixed(1)} kPa` : 'No pressure data'}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="shrink-0 text-right">
+                              <span
+                                className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${
+                                  isNormal ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                                }`}
+                              >
+                                {reading?.status || 'Offline'}
+                              </span>
+                              <p className="mt-2 font-mono text-sm font-black text-slate-900">
+                                {reading?.flow_rate?.toFixed(1) || '0.0'} L/m
+                              </p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  <section className="panel-shell">
+                    <div className="panel-heading">
+                      <div>
+                        <p className="eyebrow">Network Health</p>
+                        <h2 className="panel-title">Alert mix</h2>
+                      </div>
+                      <BarChart3 size={18} className="text-cyan-600" />
+                    </div>
+                    <div className="flex flex-col items-center gap-6 p-6 sm:flex-row sm:justify-center">
+                      <div
+                        className="relative grid h-40 w-40 shrink-0 place-items-center rounded-full shadow-[inset_0_0_0_1px_rgba(15,23,42,0.08)]"
+                        style={{
+                          background: `conic-gradient(#fb7185 0% ${anomalyPercent}%, #10b981 ${anomalyPercent}% ${
+                            anomalyPercent + healthyPercent
+                          }%, #e2e8f0 ${anomalyPercent + healthyPercent}% 100%)`,
+                        }}
+                      >
+                        <div className="grid h-28 w-28 place-items-center rounded-full bg-white shadow-inner">
+                          <div className="text-center">
+                            <p className="text-3xl font-black tracking-tight text-slate-950">{healthyPercent}%</p>
+                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Stable</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 text-sm font-semibold text-slate-600">
+                        <div className="legend-row">
+                          <span className="h-3 w-3 rounded bg-rose-400" />
+                          <strong>{anomalyCount}</strong> Crisis
+                        </div>
+                        <div className="legend-row">
+                          <span className="h-3 w-3 rounded bg-amber-400" />
+                          <strong>0</strong> Watch
+                        </div>
+                        <div className="legend-row">
+                          <span className="h-3 w-3 rounded bg-emerald-500" />
+                          <strong>{healthyCount}</strong> Normal
+                        </div>
+                        <div className="legend-row">
+                          <span className="h-3 w-3 rounded bg-slate-200" />
+                          <strong>0</strong> No data
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  
-                  <div className="flex flex-col gap-3 font-medium text-xs text-slate-600">
-                    <div className="flex items-center gap-2">
-                       <div className="w-2.5 h-2.5 rounded-sm bg-red-500 shadow-sm"></div>
-                       <span><strong className="text-slate-800">{anomalyCount}</strong> Crise</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                       <div className="w-2.5 h-2.5 rounded-sm bg-amber-500 shadow-sm"></div>
-                       <span><strong className="text-slate-800">0</strong> Vigilance</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                       <div className="w-2.5 h-2.5 rounded-sm bg-emerald-500 shadow-sm"></div>
-                       <span><strong className="text-slate-800">{healthyCount}</strong> Normale</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                       <div className="w-2.5 h-2.5 rounded-sm bg-slate-200 shadow-sm"></div>
-                       <span><strong className="text-slate-800 text-slate-400">0</strong> Pas de donnÃ©es</span>
-                    </div>
-                  </div>
-
-                </div>
+                  </section>
+                </aside>
               </div>
+            )}
 
-            </div>
+            {activeTab === 'predict' && <ForecastingPanel totalDemand={totalDemand} />}
+            {activeTab === 'footprint' && <DigitalFootprint />}
           </div>
-          )}
-          {activeTab === 'predict' && <ForecastingPanel totalDemand={totalDemand} />}
-          {activeTab === 'footprint' && <DigitalFootprint />}
-          
         </div>
       </main>
+
       <AquaBot context={{ totalDemand, anomalyCount, network, activeZone }} />
     </div>
   );

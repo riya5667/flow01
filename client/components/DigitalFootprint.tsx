@@ -42,9 +42,11 @@ export default function DigitalFootprint() {
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem('aquasense_offset_days');
+      const dayKey = 'flowintel_offset_days';
+      const reminderKey = 'flowintel_offset_reminders';
+      const raw = localStorage.getItem(dayKey) ?? localStorage.getItem('aquasense_offset_days');
       if (raw) setSavedDays(JSON.parse(raw));
-      const reminderRaw = localStorage.getItem('aquasense_offset_reminders');
+      const reminderRaw = localStorage.getItem(reminderKey) ?? localStorage.getItem('aquasense_offset_reminders');
       if (reminderRaw) setReminders(JSON.parse(reminderRaw));
     } catch (e) {
       console.error(e);
@@ -97,7 +99,7 @@ export default function DigitalFootprint() {
   const toggleReminder = (idx) => {
     setReminders((prev) => {
       const next = { ...prev, [idx]: !prev[idx] };
-      localStorage.setItem('aquasense_offset_reminders', JSON.stringify(next));
+      localStorage.setItem('flowintel_offset_reminders', JSON.stringify(next));
       return next;
     });
   };
@@ -117,7 +119,7 @@ export default function DigitalFootprint() {
     const filtered = savedDays.filter((item) => item.date !== today);
     const next = [...filtered, entry].slice(-14);
     setSavedDays(next);
-    localStorage.setItem('aquasense_offset_days', JSON.stringify(next));
+    localStorage.setItem('flowintel_offset_days', JSON.stringify(next));
   };
 
   const weeklyTotal = useMemo(() => {

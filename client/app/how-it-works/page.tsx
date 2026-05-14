@@ -56,10 +56,10 @@ export default function HowItWorks() {
         {/* Header & Short Explanation */}
         <header className="text-center mb-12">
           <h1 className="text-4xl font-bold text-blue-400 tracking-wider uppercase mb-4 shadow-blue-500 drop-shadow-sm">
-            How Aquasense Works
+            How FlowIntel Works
           </h1>
           <p className="max-w-3xl mx-auto text-slate-400 text-lg leading-relaxed">
-            Aquasense is a next-generation smart water distribution platform. It utilizes physical IoT sensors 
+            FlowIntel is a next-generation smart water distribution platform. It utilizes physical IoT sensors 
             at municipal nodes to monitor real-time flow and pressure metrics. This telemetry is streamed securely 
             to an intelligent operations center, allowing city managers to instantly detect leaks, optimize 
             water pressure routing, and forecast long-term infrastructure health through AI analytics.

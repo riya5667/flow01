@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -6,6 +6,10 @@ const cors = require('cors');
 const { initDb, storeReading, getLatestReadings, getReadingHistory, getHouseStats } = require('./db');
 const { setupHardware } = require('./hardware');
 const { getNetworkSnapshot, houses, zones } = require('./network');
+const multer = require('multer');
+const { isHFReady, ingestDocument, searchSimilar } = require('./rag');
+
+const upload = multer({ dest: 'uploads/' });
 
 const safeParseJson = (raw) => {
   if (!raw) return null;
@@ -416,14 +420,51 @@ Return format:
     res.status(500).json({ error: error.message || 'Failed' });
   }
 });
+app.post('/api/rag/ingest', upload.single('file'), async (req, res) => {
+  if (!isHFReady()) {
+    return res.status(500).json({ error: 'HF_TOKEN is not configured. Set it in server/.env' });
+  }
+  try {
+    let text = '';
+    if (req.file) {
+      const fs = require('fs');
+      if (req.file.mimetype === 'application/pdf') {
+        const pdfParse = require('pdf-parse');
+        const dataBuffer = fs.readFileSync(req.file.path);
+        const pdfData = await pdfParse(dataBuffer);
+        text = pdfData.text;
+      } else {
+        text = fs.readFileSync(req.file.path, 'utf8');
+      }
+      fs.unlinkSync(req.file.path); // clean up
+    } else if (req.body.text) {
+      text = req.body.text;
+    } else {
+      return res.status(400).json({ error: 'No file or text provided' });
+    }
+
+    const chunksAdded = await ingestDocument(text, { filename: req.file?.originalname || 'text-input' });
+    res.json({ message: `Successfully ingested ${chunksAdded} chunks into knowledge base.` });
+  } catch (error) {
+    console.error('Ingest error:', error);
+    res.status(500).json({ error: 'Failed to ingest document' });
+  }
+});
+
 app.post('/api/aquabot', async (req, res) => {
   if (!groqReady) return res.status(500).json({ error: 'Groq is not configured. Set GROQ_API_KEY in server/.env.' });
   const { message, context } = req.body;
   try {
+    // RAG Search
+    const relevantChunks = await searchSimilar(message, 3);
+    const contextFromStore = relevantChunks.length > 0 
+      ? `\n\nKnowledge Base:\n${relevantChunks.map((c, i) => `[${i+1}] ${c}`).join('\n')}`
+      : '';
+
     const prompt = `You are AquaBot, an AI assistant for the Smart Indore water observatory.
-Context: ${JSON.stringify(context)}
+Context: ${JSON.stringify(context)}${contextFromStore}
 User says: "${message}"
-Reply warmly, concisely, in French (as the dashboard is in French). Max 3 sentences.`;
+Reply warmly, concisely, in English. Max 3 sentences. Use the Knowledge Base if relevant.`;
     if (typeof fetch !== 'function') {
       throw new Error('Global fetch is not available. Please use Node 18+.');
     }
