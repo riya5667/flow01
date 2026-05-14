@@ -461,10 +461,36 @@ app.post('/api/aquabot', async (req, res) => {
       ? `\n\nKnowledge Base:\n${relevantChunks.map((c, i) => `[${i+1}] ${c}`).join('\n')}`
       : '';
 
-    const prompt = `You are AquaBot, an AI assistant for the Smart Indore water observatory.
-Context: ${JSON.stringify(context)}${contextFromStore}
-User says: "${message}"
-Reply warmly, concisely, in English. Max 3 sentences. Use the Knowledge Base if relevant.`;
+    const live = context?.liveReadings || {};
+    const liveSection = Object.keys(live).length > 0
+      ? `\n\n🔴 LIVE ARDUINO SENSOR READINGS (real-time, from hardware):\n` +
+        `  • Flow Sensor 1: ${live.flow1 ?? 'N/A'} L/min\n` +
+        `  • Flow Sensor 2: ${live.flow2 ?? 'N/A'} L/min\n` +
+        `  • Humidity: ${live.humidity ?? 'N/A'}%\n` +
+        `  • Leak Detection: ${live.leak ?? 'N/A'}\n` +
+        `  • Theft Detection: ${live.theft ?? 'N/A'}\n` +
+        `  • TDS (water quality): ${live.tds ?? 'N/A'} ppm\n` +
+        `  • Water Level: ${live.waterLevel ?? 'N/A'}%\n` +
+        `  • System Status: ${live.status ?? 'N/A'}\n` +
+        `  • Buzzer: ${live.buzzer ?? 'N/A'}\n` +
+        `  • Water Health: ${live.waterHealth ?? 'N/A'}`
+      : '';
+
+    const networkSection = context?.totalDemand !== undefined
+      ? `\n\n📡 NETWORK OVERVIEW:\n  • Total Demand: ${context.totalDemand?.toFixed?.(2) ?? context.totalDemand} L/min\n  • Active Anomalies: ${context.anomalyCount ?? 0}`
+      : '';
+
+    const prompt = `You are AquaBot, an expert AI assistant for the Smart Indore water monitoring platform.
+You have access to real-time live sensor data from Arduino hardware nodes.${liveSection}${networkSection}${contextFromStore}
+
+User question: "${message}"
+
+Instructions:
+- Answer in clear, concise English (2-4 sentences max).
+- If the question is about sensor readings, use the LIVE DATA above for an accurate, specific answer.
+- If a leak or theft is DETECTED, flag it with urgency.
+- If knowledge base context is available, use it to supplement your answer.
+- Be warm and professional.`;
     if (typeof fetch !== 'function') {
       throw new Error('Global fetch is not available. Please use Node 18+.');
     }

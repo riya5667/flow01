@@ -461,7 +461,24 @@ export default function ObservatoryDashboard() {
         </main>
       </div>
 
-      <AquaBot context={{ totalDemand: totals.demand, anomalyCount: totals.alerts, network, activeZone }} />
+      <AquaBot context={{
+        totalDemand: totals.demand,
+        anomalyCount: totals.alerts,
+        network,
+        activeZone,
+        liveReadings: {
+          flow1: flow1.toFixed(2),
+          flow2: flow2.toFixed(2),
+          humidity: humidity !== null ? humidity.toFixed(1) : 'N/A',
+          leak: leak === 1 ? 'DETECTED' : 'Clear',
+          theft: theft === 1 ? 'DETECTED' : 'Clear',
+          tds: physicalTds,
+          waterHealth: physicalWaterHealth,
+          waterLevel: waterLevel.toFixed(1),
+          status: physicalNode?.status || 'Offline',
+          buzzer: buzzer === 1 ? 'Active' : 'Off',
+        }
+      }} />
     </div>
   );
 }
