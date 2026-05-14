@@ -27,10 +27,14 @@ const byte buzzerPin = 10;
 // ---------- TANK SETTINGS ----------
 const float tankEmptyDistanceCm = 25.0;
 const float tankFullDistanceCm = 4.0;
+const float minValidDistanceCm = 2.0;
+const float maxValidDistanceCm = 400.0;
 
 const int lowWaterLevelPercent = 20;
 
 const int leakDropThresholdPercent = 5;
+const float theftFlowThresholdLpm = 0.20;
+const float theftFlowMismatchThresholdLpm = 2.00;
 
 // ---------- TIMERS ----------
 unsigned long currentTime = 0;
@@ -39,9 +43,10 @@ unsigned long cloopTime = 0;
 unsigned long leakCheckStart = 0;
 
 // ---------- WATER LEVEL ----------
-float lastValidDistance = 0.0;
+float lastValidDistance = -1.0;
 
 int previousWaterLevel = -1;
+int activeAlertMode = 0;
 
 
 // ========================================
@@ -79,10 +84,20 @@ float readDistanceCm()
 
   if (duration == 0)
   {
-    return lastValidDistance;
+    return -1.0;
   }
 
-  return duration * 0.0343 / 2.0;
+  float distanceCm = duration * 0.0343 / 2.0;
+
+  if (
+    distanceCm < minValidDistanceCm ||
+    distanceCm > maxValidDistanceCm
+  )
+  {
+    return -1.0;
+  }
+
+  return distanceCm;
 }
 
 
@@ -91,6 +106,11 @@ float readDistanceCm()
 // ========================================
 int calculateLevelPercent(float distanceCm)
 {
+  if (distanceCm < 0)
+  {
+    return 0;
+  }
+
   float level =
     (
       (tankEmptyDistanceCm - distanceCm)
@@ -99,6 +119,31 @@ int calculateLevelPercent(float distanceCm)
     ) * 100.0;
 
   return constrain((int)level, 0, 100);
+}
+
+
+// ========================================
+// BUZZER BEEP PATTERN
+// ========================================
+void updateBuzzer()
+{
+  if (activeAlertMode == 0)
+  {
+    noTone(buzzerPin);
+    return;
+  }
+
+  unsigned long interval =
+    activeAlertMode == 2 ? 180 : 350;
+
+  if ((millis() / interval) % 2 == 0)
+  {
+    tone(buzzerPin, 2000);
+  }
+  else
+  {
+    noTone(buzzerPin);
+  }
 }
 
 
@@ -122,6 +167,9 @@ void setup()
 
   // Buzzer
   pinMode(buzzerPin, OUTPUT);
+  tone(buzzerPin, 2000);
+  delay(180);
+  noTone(buzzerPin);
 
   // Interrupts
   attachInterrupt(
@@ -151,6 +199,7 @@ void setup()
 void loop()
 {
   currentTime = millis();
+  updateBuzzer();
 
   // Update every second
   if (currentTime - cloopTime >= 1000)
@@ -217,12 +266,30 @@ void loop()
     // ULTRASONIC
     // ========================================
 
-    float distanceCm = readDistanceCm();
+    float distanceReadingCm = readDistanceCm();
+    int ultrasonicReady =
+      distanceReadingCm >= 0 ? 1 : 0;
 
-    lastValidDistance = distanceCm;
+    if (ultrasonicReady == 1)
+    {
+      lastValidDistance = distanceReadingCm;
+    }
+
+    float distanceCm =
+      ultrasonicReady == 1
+        ? distanceReadingCm
+        : lastValidDistance;
 
     int waterLevelPercent =
       calculateLevelPercent(distanceCm);
+
+    float totalFlow =
+      flow1Rate + flow2Rate;
+
+    float flowMismatch =
+      flow1Rate > flow2Rate
+        ? flow1Rate - flow2Rate
+        : flow2Rate - flow1Rate;
 
     // ========================================
     // LEAK DETECTION
@@ -230,7 +297,10 @@ void loop()
 
     int leakDetected = 0;
 
-    if (previousWaterLevel == -1)
+    if (
+      ultrasonicReady == 1 &&
+      previousWaterLevel == -1
+    )
     {
       previousWaterLevel = waterLevelPercent;
     }
@@ -239,14 +309,18 @@ void loop()
       previousWaterLevel - waterLevelPercent;
 
     if (
+      ultrasonicReady == 1 &&
       levelDrop >= leakDropThresholdPercent &&
-      flow1Rate > 0
+      totalFlow <= theftFlowThresholdLpm
     )
     {
       leakDetected = 1;
     }
 
-    previousWaterLevel = waterLevelPercent;
+    if (ultrasonicReady == 1)
+    {
+      previousWaterLevel = waterLevelPercent;
+    }
 
     // ========================================
     // THEFT DETECTION
@@ -255,8 +329,16 @@ void loop()
     int theftDetected = 0;
 
     if (
-      flow2Rate > 1.0 &&
-      waterLevelPercent < lowWaterLevelPercent
+      ultrasonicReady == 1 &&
+      levelDrop >= leakDropThresholdPercent &&
+      totalFlow > theftFlowThresholdLpm
+    )
+    {
+      theftDetected = 1;
+    }
+
+    if (
+      flowMismatch >= theftFlowMismatchThresholdLpm
     )
     {
       theftDetected = 1;
@@ -268,18 +350,20 @@ void loop()
 
     int buzzerState = 0;
 
-    if (
-      leakDetected == 1 ||
-      theftDetected == 1
-    )
+    if (theftDetected == 1)
     {
+      activeAlertMode = 2;
       buzzerState = 1;
-
-      tone(buzzerPin, 2000);
+    }
+    else if (leakDetected == 1)
+    {
+      activeAlertMode = 1;
+      buzzerState = 1;
     }
     else
     {
-      noTone(buzzerPin);
+      activeAlertMode = 0;
+      buzzerState = 0;
     }
 
     // ========================================
@@ -300,6 +384,9 @@ void loop()
 
     Serial.print(",LEVEL:");
     Serial.print(waterLevelPercent);
+
+    Serial.print(",ULTRASONIC:");
+    Serial.print(ultrasonicReady);
 
     Serial.print(",LEAK:");
     Serial.print(leakDetected);

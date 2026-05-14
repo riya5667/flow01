@@ -178,7 +178,17 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-initDb();
+let dbReady = false;
+initDb((err) => {
+  if (err) {
+    console.error('[Database] Hardware startup skipped because schema initialization failed.');
+    return;
+  }
+
+  dbReady = true;
+  console.log('[Database] Schema ready.');
+  setupHardware(handleSensorData);
+});
 
 io.on('connection', (socket) => {
   console.log('A client connected:', socket.id);
@@ -198,6 +208,10 @@ io.on('connection', (socket) => {
 
 const handleSensorData = (reading) => {
   console.log('Received sensor data:', reading);
+  if (!dbReady) {
+    console.warn('[Database] Skipping sensor data until schema is ready.');
+    return;
+  }
   storeReading(reading);
   io.emit('sensorUpdate', reading);
 
@@ -221,8 +235,6 @@ const handleSensorData = (reading) => {
     io.emit('statsUpdate', stats);
   });
 };
-
-setupHardware(handleSensorData);
 
 app.get('/api/status', (req, res) => {
   res.json({

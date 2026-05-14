@@ -150,6 +150,7 @@ const normalizeReading = (input) => {
   const humidity = clamp(toSensorNumber(input.humidity ?? input.HUMIDITY), 0, 100);
   const distanceCm = clamp(toSensorNumber(input.distance_cm ?? input.distanceCm ?? input.distance ?? input.DISTANCE, 0), 0, 500);
   const waterLevel = clamp(toSensorNumber(input.water_level ?? input.waterLevel ?? input.level ?? input.LEVEL, 0), 0, 100);
+  const ultrasonic = toSensorNumber(input.ultrasonic ?? input.ULTRASONIC, distanceCm > 0 ? 1 : 0) === 1 ? 1 : 0;
   const leak = toSensorNumber(input.leak ?? input.LEAK) === 1 ? 1 : 0;
   const theft = toSensorNumber(input.theft ?? input.THEFT) === 1 ? 1 : 0;
   const buzzer = toSensorNumber(input.buzzer ?? input.BUZZER) === 1 ? 1 : 0;
@@ -170,6 +171,7 @@ const normalizeReading = (input) => {
     humidity: Number(humidity.toFixed(2)),
     distance_cm: Number(distanceCm.toFixed(2)),
     water_level: Number(waterLevel.toFixed(2)),
+    ultrasonic,
     leak,
     theft,
     buzzer,
@@ -212,15 +214,16 @@ const parseArduinoLine = (line) => {
   }
 
   const sensorPairs = parseKeyValueLine(trimmed);
-  if (sensorPairs && (sensorPairs.FLOW !== undefined || sensorPairs.FLOW1 !== undefined || sensorPairs.FLOW2 !== undefined || sensorPairs.VIBRATION !== undefined || sensorPairs.HUMIDITY !== undefined || sensorPairs.DISTANCE !== undefined || sensorPairs.LEVEL !== undefined || sensorPairs.LEAK !== undefined || sensorPairs.THEFT !== undefined || sensorPairs.BUZZER !== undefined)) {
+  if (sensorPairs && (sensorPairs.FLOW !== undefined || sensorPairs.FLOW1 !== undefined || sensorPairs.FLOW2 !== undefined || sensorPairs.VIBRATION !== undefined || sensorPairs.HUMIDITY !== undefined || sensorPairs.Y !== undefined || sensorPairs.DISTANCE !== undefined || sensorPairs.LEVEL !== undefined || sensorPairs.ULTRASONIC !== undefined || sensorPairs.LEAK !== undefined || sensorPairs.THEFT !== undefined || sensorPairs.BUZZER !== undefined)) {
     return normalizeReading({
       house_id: 'house_1',
       flow1: sensorPairs.FLOW1 ?? sensorPairs.FLOW,
       flow2: sensorPairs.FLOW2 ?? 0,
       vibration: sensorPairs.VIBRATION,
-      humidity: sensorPairs.HUMIDITY,
+      humidity: sensorPairs.HUMIDITY ?? sensorPairs.Y,
       distance: sensorPairs.DISTANCE,
       level: sensorPairs.LEVEL,
+      ultrasonic: sensorPairs.ULTRASONIC,
       leak: sensorPairs.LEAK,
       theft: sensorPairs.THEFT,
       buzzer: sensorPairs.BUZZER,

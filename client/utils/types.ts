@@ -28,6 +28,7 @@ export interface SensorReading {
   humidity?: number;
   distance_cm?: number;
   water_level?: number;
+  ultrasonic?: number;
   leak?: number;
   theft?: number;
   buzzer?: number;

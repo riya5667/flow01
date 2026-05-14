@@ -44,10 +44,11 @@ export default function ArduinoChart({ reading }: ArduinoChartProps) {
   const humidityValue = humidity ?? 0;
   const distanceCm = Number.isFinite(reading?.distance_cm) ? Number(reading?.distance_cm) : null;
   const measuredWaterLevel = Number.isFinite(reading?.water_level) ? Number(reading?.water_level) : null;
+  const ultrasonic = reading?.ultrasonic ?? 0;
   const leak = reading?.leak ?? 0;
   const theft = reading?.theft ?? 0;
   const buzzer = reading?.buzzer ?? 0;
-  const isAlert = humidityValue > 75 || leak === 1 || theft === 1 || buzzer === 1 || (!!reading && reading.status !== 'Normal');
+  const isAlert = ultrasonic === 0 || humidityValue > 75 || leak === 1 || theft === 1 || buzzer === 1 || (!!reading && reading.status !== 'Normal');
   const isConnected = !!reading && reading.status !== 'Offline';
   const waterLevel = measuredWaterLevel ?? Math.min(92, Math.max(18, ((flow1 + flow2) / 20) * 100));
 
@@ -55,7 +56,7 @@ export default function ArduinoChart({ reading }: ArduinoChartProps) {
     { label: 'Flow sensor 1', value: `${flow1.toFixed(2)} L/m`, icon: <Droplet size={14} />, alert: flow1 <= 0.05 },
     { label: 'Flow sensor 2', value: `${flow2.toFixed(2)} L/m`, icon: <Droplet size={14} />, alert: flow2 <= 0.05 },
     { label: 'Humidity', value: humidity === null ? 'Waiting' : `${humidity.toFixed(0)}%`, icon: <Gauge size={14} />, alert: humidityValue > 75 },
-    { label: 'Ultrasonic', value: distanceCm === null ? 'Waiting' : `${distanceCm.toFixed(1)} cm`, icon: <Ruler size={14} />, alert: waterLevel <= 20 },
+    { label: 'Ultrasonic', value: ultrasonic === 1 && distanceCm !== null ? `${distanceCm.toFixed(1)} cm` : 'Check', icon: <Ruler size={14} />, alert: ultrasonic === 0 || waterLevel <= 20 },
     { label: 'Leakage', value: leak === 1 ? 'Found' : 'Clear', icon: <Droplet size={14} />, alert: leak === 1 },
     { label: 'Theft', value: theft === 1 ? 'Found' : 'Clear', icon: <ShieldAlert size={14} />, alert: theft === 1 },
     { label: 'Buzzer', value: buzzer === 1 ? 'On' : 'Off', icon: <Bell size={14} />, alert: buzzer === 1 },
