@@ -3,135 +3,13 @@ const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const { initDb, storeReading, getLatestReadings, getReadingHistory, getHouseStats, getRecentAlerts } = require('./db');
-const { getHardwareStatus, setupHardware } = require('./hardware');
+const { initDb, storeReading, getLatestReadings, getReadingHistory, getHouseStats } = require('./db');
+const { setupHardware } = require('./hardware');
 const { getNetworkSnapshot, houses, zones } = require('./network');
-const { sendLeakAlert, sendWaterReport } = require('./whatsapp');
+const multer = require('multer');
+const { isHFReady, ingestDocument, searchSimilar } = require('./rag');
 
-// Keep track of the last time an alert was sent for each node to prevent spamming.
-const lastAlerts = {};
-const ALERT_COOLDOWN_MS = 20000; // 20 seconds
-
-const toFiniteNumber = (value) => {
-  const numeric = Number(String(value ?? '').replace(/[^0-9.+-]/g, ''));
-  return Number.isFinite(numeric) ? numeric : null;
-};
-
-const getAlertKey = (reading = {}) =>
-  String(reading.house_id || reading.houseId || reading.zone || reading.zoneName || 'global');
-
-const shouldAlertForReading = (reading = {}) => {
-  const status = String(reading.status || '').toLowerCase();
-  const flowRate = toFiniteNumber(reading.flow_rate ?? reading.flowRate);
-  const pressure = toFiniteNumber(reading.pressure);
-  const vibration = toFiniteNumber(reading.vibration);
-  const humidity = toFiniteNumber(reading.humidity);
-  const flow1 = toFiniteNumber(reading.flow1);
-  const flow2 = toFiniteNumber(reading.flow2);
-
-  return (
-    vibration === 1 ||
-    (humidity !== null && humidity > Number(process.env.HUMIDITY_ALERT_THRESHOLD || 75)) ||
-    (flow1 !== null && flow2 !== null && flow1 <= 0.05 && flow2 <= 0.05) ||
-    status.includes('leak') ||
-    status.includes('abnormal') ||
-    status.includes('error') ||
-    status.includes('no flow') ||
-    status.includes('vibration') ||
-    status.includes('humidity') ||
-    status.includes('stopped') ||
-    status.includes('pressure drop') ||
-    (flowRate !== null && flowRate <= 0.35) ||
-    (pressure !== null && pressure <= 8)
-  );
-};
-
-const shouldAlertForAnalysis = ({ currentFlow, baseline, lastReadings, parsed }) => {
-  const flowRate = toFiniteNumber(currentFlow);
-  const baselineFlow = toFiniteNumber(baseline);
-  const leakProbability = toFiniteNumber(parsed?.leakProbability);
-  const status = String(parsed?.status || '').toLowerCase();
-  const anomaly = String(parsed?.anomaly || '').toLowerCase();
-  const previousFlow = Array.isArray(lastReadings) && lastReadings.length > 0
-    ? toFiniteNumber(lastReadings[lastReadings.length - 1]?.flowRate ?? lastReadings[lastReadings.length - 1]?.flow_rate)
-    : null;
-
-  const dropFromBaseline =
-    flowRate !== null && baselineFlow !== null && baselineFlow > 0 && flowRate < baselineFlow * 0.65;
-  const suddenDrop =
-    flowRate !== null && previousFlow !== null && previousFlow > 0 && flowRate < previousFlow * 0.7;
-
-  return (
-    status.includes('leak') ||
-    anomaly.includes('leak') ||
-    (leakProbability !== null && leakProbability > 70) ||
-    dropFromBaseline ||
-    suddenDrop ||
-    (flowRate !== null && flowRate <= 0.35)
-  );
-};
-
-const buildHeuristicAnalysis = ({ currentFlow, baseline, lastReadings, alerts, zone }) => {
-  const flowRate = toFiniteNumber(currentFlow) ?? 0;
-  const baselineFlow = toFiniteNumber(baseline);
-  const previousFlow = Array.isArray(lastReadings) && lastReadings.length > 0
-    ? toFiniteNumber(lastReadings[lastReadings.length - 1]?.flowRate ?? lastReadings[lastReadings.length - 1]?.flow_rate)
-    : null;
-  const activeAlerts = Array.isArray(alerts) ? alerts.length : 0;
-
-  const dropFromBaseline =
-    baselineFlow !== null && baselineFlow > 0 ? flowRate < baselineFlow * 0.65 : false;
-  const suddenDrop =
-    previousFlow !== null && previousFlow > 0 ? flowRate < previousFlow * 0.7 : false;
-  const severeDrop =
-    baselineFlow !== null && baselineFlow > 0
-      ? Math.max(0, Math.round(((baselineFlow - flowRate) / baselineFlow) * 100))
-      : flowRate <= 0.35
-        ? 95
-        : activeAlerts > 0
-          ? 72
-          : 18;
-
-  if (flowRate <= 0.35 || dropFromBaseline || suddenDrop) {
-    return {
-      status: 'Leak suspected',
-      anomaly: 'Yes',
-      leakProbability: `${Math.min(99, Math.max(72, severeDrop))}%`,
-      cause: flowRate <= 0.35 ? 'Near-zero flow detected.' : 'Flow dropped sharply from expected range.',
-      prediction: `Leak risk is elevated for ${zone || 'the monitored zone'}.`,
-      action: 'Inspect the line, valve, and meter immediately.',
-      confidence: '84%',
-    };
-  }
-
-  return {
-    status: 'Normal',
-    anomaly: 'None',
-    leakProbability: `${Math.max(5, Math.min(35, severeDrop))}%`,
-    cause: 'Flow is within the expected operating band.',
-    prediction: `No immediate leak pattern detected for ${zone || 'the monitored zone'}.`,
-    action: activeAlerts > 0 ? 'Continue monitoring active alerts.' : 'Continue routine monitoring.',
-    confidence: '76%',
-  };
-};
-
-const dispatchLeakAlert = (reading = {}) => {
-  if (!shouldAlertForReading(reading)) {
-    return false;
-  }
-
-  const now = Date.now();
-  const key = getAlertKey(reading);
-  const lastTime = lastAlerts[key] || 0;
-
-  if (now - lastTime <= ALERT_COOLDOWN_MS) {
-    return false;
-  }
-
-  lastAlerts[key] = now;
-  sendLeakAlert(reading);
-  return true;
-};
+const upload = multer({ dest: 'uploads/' });
 
 const safeParseJson = (raw) => {
   if (!raw) return null;
@@ -197,10 +75,6 @@ io.on('connection', (socket) => {
     socket.emit('initialReadings', readings);
   });
 
-  getRecentAlerts({ limit: 20 }, (alerts) => {
-    socket.emit('initialAlerts', alerts);
-  });
-
   socket.on('disconnect', () => {
     console.log('A client disconnected:', socket.id);
   });
@@ -214,26 +88,6 @@ const handleSensorData = (reading) => {
   }
   storeReading(reading);
   io.emit('sensorUpdate', reading);
-
-  if (Array.isArray(reading.alert_reasons) && reading.alert_reasons.length > 0) {
-    reading.alert_reasons.forEach((message) => {
-      io.emit('alertUpdate', {
-        house_id: reading.house_id,
-        type: reading.status,
-        message,
-        severity: 'critical',
-        timestamp: reading.timestamp,
-      });
-    });
-  }
-
-  // Real-time alert: keep WhatsApp in sync with the same leak-like conditions the UI flags.
-  dispatchLeakAlert(reading);
-
-  // Broadcast global stats update for the "Total Flow" card
-  getHouseStats((stats) => {
-    io.emit('statsUpdate', stats);
-  });
 };
 
 app.get('/api/status', (req, res) => {
@@ -242,13 +96,8 @@ app.get('/api/status', (req, res) => {
     message: 'Flow monitoring backend is streaming telemetry.',
     houses: houses.length,
     zones: zones.length,
-    hardware: getHardwareStatus(),
     generatedAt: new Date().toISOString(),
   });
-});
-
-app.get('/api/hardware/status', (req, res) => {
-  res.json(getHardwareStatus());
 });
 
 app.get('/api/network', (req, res) => {
@@ -294,13 +143,6 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
-app.get('/api/alerts/recent', (req, res) => {
-  const limit = Number(req.query.limit || 30);
-  getRecentAlerts({ limit }, (alerts) => {
-    res.json(alerts);
-  });
-});
-
 app.post('/api/ai-suggestions', async (req, res) => {
   if (!groqReady) {
     return res.status(500).json({ error: 'Groq is not configured. Set GROQ_API_KEY in server/.env.' });
@@ -313,8 +155,6 @@ app.post('/api/ai-suggestions', async (req, res) => {
 The current live telemetry from the main physical hardware sensor (House 1) is:
 - Flow Rate: ${physicalNode?.flow_rate || 0} L/min
 - Pressure: ${physicalNode?.pressure || 0} kPa
-- TDS: ${physicalNode?.tds || 0} ppm
-- Water Health: ${physicalNode?.water_health || 'Unknown'}
 - Status: ${physicalNode?.status || 'Offline'}
 
 Global Network Stats:
@@ -361,6 +201,10 @@ If the physical flow matches 0.00 L/min, immediately suggest dispatching a field
 });
 
 app.post('/api/ai-analysis', async (req, res) => {
+  if (!groqReady) {
+    return res.status(500).json({ error: 'Groq is not configured. Set GROQ_API_KEY in server/.env.' });
+  }
+
   const {
     currentFlow,
     lastReadings,
@@ -376,18 +220,6 @@ app.post('/api/ai-analysis', async (req, res) => {
     baseline === undefined
   ) {
     return res.status(400).json({ error: 'Sensor data payload is empty or invalid.' });
-  }
-
-  if (!groqReady) {
-    const fallbackPayload = buildHeuristicAnalysis({ currentFlow, baseline, lastReadings, alerts, zone });
-    if (shouldAlertForAnalysis({ currentFlow, baseline, lastReadings, parsed: fallbackPayload })) {
-      dispatchLeakAlert({
-        house_id: zone || 'Unknown',
-        flow_rate: currentFlow,
-        status: fallbackPayload.status,
-      });
-    }
-    return res.json(fallbackPayload);
   }
 
   try {
@@ -449,15 +281,6 @@ Keep answers short and clear.`;
       confidence: parsed.confidence || '',
     };
 
-    // WhatsApp Trigger: if AI analysis confirms a high probability leak
-    if (shouldAlertForAnalysis({ currentFlow, baseline, lastReadings, parsed })) {
-      dispatchLeakAlert({
-        house_id: zone || 'Unknown',
-        flow_rate: currentFlow,
-        status: parsed.status
-      });
-    }
-
     res.json(responsePayload);
   } catch (error) {
     const detailedMessage =
@@ -468,45 +291,6 @@ Keep answers short and clear.`;
     console.error('AI Analysis Error:', detailedMessage);
     res.status(500).json({ error: detailedMessage });
   }
-});
-
-app.post('/api/alerts/leak', (req, res) => {
-  const {
-    house_id,
-    flow_rate,
-    pressure,
-    status,
-    zone,
-    reason,
-  } = req.body || {};
-
-  const alertReading = {
-    house_id: house_id || zone || 'Unknown',
-    flow_rate,
-    pressure,
-    status: status || reason || 'Leak suspected',
-  };
-
-  const sent = dispatchLeakAlert(alertReading);
-  res.json({ ok: true, sent });
-});
-
-app.post('/api/whatsapp/report', (req, res) => {
-  getHouseStats((stats) => {
-    getRecentAlerts({ limit: 10 }, async (recentAlerts) => {
-      try {
-        const result = await sendWaterReport({
-          stats,
-          alerts: recentAlerts,
-          generatedAt: new Date(),
-        });
-        res.json({ ok: !!result.ok, result });
-      } catch (error) {
-        console.error('[WhatsApp] Report failed:', error.message);
-        res.status(500).json({ error: error.message || 'Failed to send WhatsApp report' });
-      }
-    });
-  });
 });
 
 app.post('/api/ai-forecasting', async (req, res) => {
@@ -648,14 +432,77 @@ Return format:
     res.status(500).json({ error: error.message || 'Failed' });
   }
 });
+app.post('/api/rag/ingest', upload.single('file'), async (req, res) => {
+  if (!isHFReady()) {
+    return res.status(500).json({ error: 'HF_TOKEN is not configured. Set it in server/.env' });
+  }
+  try {
+    let text = '';
+    if (req.file) {
+      const fs = require('fs');
+      if (req.file.mimetype === 'application/pdf') {
+        const pdfParse = require('pdf-parse');
+        const dataBuffer = fs.readFileSync(req.file.path);
+        const pdfData = await pdfParse(dataBuffer);
+        text = pdfData.text;
+      } else {
+        text = fs.readFileSync(req.file.path, 'utf8');
+      }
+      fs.unlinkSync(req.file.path); // clean up
+    } else if (req.body.text) {
+      text = req.body.text;
+    } else {
+      return res.status(400).json({ error: 'No file or text provided' });
+    }
+
+    const chunksAdded = await ingestDocument(text, { filename: req.file?.originalname || 'text-input' });
+    res.json({ message: `Successfully ingested ${chunksAdded} chunks into knowledge base.` });
+  } catch (error) {
+    console.error('Ingest error:', error);
+    res.status(500).json({ error: 'Failed to ingest document' });
+  }
+});
+
 app.post('/api/aquabot', async (req, res) => {
   if (!groqReady) return res.status(500).json({ error: 'Groq is not configured. Set GROQ_API_KEY in server/.env.' });
   const { message, context } = req.body;
   try {
-    const prompt = `You are AquaBot, an AI assistant for the Smart Indore water observatory.
-Context: ${JSON.stringify(context)}
-User says: "${message}"
-Reply warmly, concisely, in French (as the dashboard is in French). Max 3 sentences.`;
+    // RAG Search
+    const relevantChunks = await searchSimilar(message, 3);
+    const contextFromStore = relevantChunks.length > 0 
+      ? `\n\nKnowledge Base:\n${relevantChunks.map((c, i) => `[${i+1}] ${c}`).join('\n')}`
+      : '';
+
+    const live = context?.liveReadings || {};
+    const liveSection = Object.keys(live).length > 0
+      ? `\n\n🔴 LIVE ARDUINO SENSOR READINGS (real-time, from hardware):\n` +
+        `  • Flow Sensor 1: ${live.flow1 ?? 'N/A'} L/min\n` +
+        `  • Flow Sensor 2: ${live.flow2 ?? 'N/A'} L/min\n` +
+        `  • Humidity: ${live.humidity ?? 'N/A'}%\n` +
+        `  • Leak Detection: ${live.leak ?? 'N/A'}\n` +
+        `  • Theft Detection: ${live.theft ?? 'N/A'}\n` +
+        `  • TDS (water quality): ${live.tds ?? 'N/A'} ppm\n` +
+        `  • Water Level: ${live.waterLevel ?? 'N/A'}%\n` +
+        `  • System Status: ${live.status ?? 'N/A'}\n` +
+        `  • Buzzer: ${live.buzzer ?? 'N/A'}\n` +
+        `  • Water Health: ${live.waterHealth ?? 'N/A'}`
+      : '';
+
+    const networkSection = context?.totalDemand !== undefined
+      ? `\n\n📡 NETWORK OVERVIEW:\n  • Total Demand: ${context.totalDemand?.toFixed?.(2) ?? context.totalDemand} L/min\n  • Active Anomalies: ${context.anomalyCount ?? 0}`
+      : '';
+
+    const prompt = `You are AquaBot, an expert AI assistant for the Smart Indore water monitoring platform.
+You have access to real-time live sensor data from Arduino hardware nodes.${liveSection}${networkSection}${contextFromStore}
+
+User question: "${message}"
+
+Instructions:
+- Answer in clear, concise English (2-4 sentences max).
+- If the question is about sensor readings, use the LIVE DATA above for an accurate, specific answer.
+- If a leak or theft is DETECTED, flag it with urgency.
+- If knowledge base context is available, use it to supplement your answer.
+- Be warm and professional.`;
     if (typeof fetch !== 'function') {
       throw new Error('Global fetch is not available. Please use Node 18+.');
     }
@@ -682,3 +529,6 @@ Reply warmly, concisely, in French (as the dashboard is in French). Max 3 senten
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+
+
