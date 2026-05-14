@@ -3,17 +3,48 @@ export type SensorStatus =
   | 'Abnormal Flow'
   | 'Leak Risk'
   | 'No Flow'
-  | 'Offline';
+  | 'Offline'
+  | 'Sensor Error'
+  | 'Night Leak Warning'
+  | 'High Vibration'
+  | 'High Humidity'
+  | 'Low Water Level'
+  | 'Water Leakage'
+  | 'Water Theft'
+  | 'Flow Stopped';
+
+export type WaterHealth = 'Good' | 'Bad' | 'Unknown';
 
 export interface SensorReading {
   house_id: string;
   pipeline_id?: string;
   zone_id?: string;
+  flow1?: number;
+  flow2?: number;
   flow_rate: number;
   pressure: number;
+  tds?: number;
+  vibration?: number;
+  humidity?: number;
+  distance_cm?: number;
+  water_level?: number;
+  leak?: number;
+  theft?: number;
+  buzzer?: number;
+  water_health?: WaterHealth;
   status: SensorStatus;
   timestamp: string;
   is_mock?: boolean;
+  alert_reasons?: string[];
+}
+
+export interface SensorAlert {
+  id?: number;
+  house_id: string;
+  type: string;
+  message: string;
+  severity: 'critical' | 'warning' | 'info';
+  timestamp: string;
 }
 
 export interface WaterTank {

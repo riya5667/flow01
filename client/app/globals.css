@@ -21,11 +21,11 @@
 }
 
 html, body {
-  height: 100vh;
+  min-height: 100vh;
   margin: 0;
   background: var(--background);
   color: var(--foreground);
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
 body {
@@ -53,6 +53,38 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes wave {
+  0%, 100% {
+    transform: translateX(-8%) translateY(0);
+  }
+  50% {
+    transform: translateX(8%) translateY(4px);
+  }
+}
+
+@keyframes waterWave {
+  0%, 100% {
+    transform: translateX(-8%) translateY(0) scaleX(1);
+  }
+  50% {
+    transform: translateX(8%) translateY(5px) scaleX(1.04);
+  }
+}
+
+@keyframes bubbleRise {
+  0% {
+    opacity: 0;
+    transform: translateY(90px) scale(0.75);
+  }
+  18% {
+    opacity: 0.7;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-34px) scale(1.1);
   }
 }
 

@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2,
   BrainCircuit,
@@ -134,6 +134,7 @@ export default function AIAnalysis() {
   const [history, setHistory] = useState([]);
   const [showLeakToast, setShowLeakToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+  const lastLeakAlertRef = useRef('');
 
   const currentReadings = useMemo(() => Object.values(readings || {}), [readings]);
   const primaryReading = currentReadings.find((reading) => reading.house_id === 'house_1') || currentReadings[0];
@@ -219,13 +220,39 @@ export default function AIAnalysis() {
 
     if (riskLevel === 'High' && (dropFromBaseline || suddenDrop)) {
       const reason = dropFromBaseline ? 'Flow dropped below 65% of baseline.' : 'Sudden flow drop detected.';
+      const alertKey = [
+        primaryReading?.house_id || network?.zones?.[0]?.name || 'Unknown',
+        Number(liveFlow || 0).toFixed(2),
+        reason,
+      ].join(':');
+
       setToastMessage(`Leak detected. ${reason}`);
       setShowLeakToast(true);
+
+      if (lastLeakAlertRef.current !== alertKey) {
+        lastLeakAlertRef.current = alertKey;
+        fetch('/api/alerts/leak', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            house_id: primaryReading?.house_id,
+            zone: network?.zones?.[0]?.name || 'Unknown',
+            flow_rate: liveFlow,
+            pressure: primaryReading?.pressure,
+            baseline,
+            reason,
+            status: 'Leak suspected',
+          }),
+        }).catch((alertError) => {
+          console.error('Failed to notify backend about leak alert', alertError);
+        });
+      }
+
       const timeout = setTimeout(() => setShowLeakToast(false), 5000);
       return () => clearTimeout(timeout);
     }
     return undefined;
-  }, [liveFlow, baseline, history, riskLevel]);
+  }, [liveFlow, baseline, history, riskLevel, network, primaryReading]);
 
   const handleRun = async () => {
     setError('');

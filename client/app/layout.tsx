@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import { Public_Sans, Space_Grotesk } from 'next/font/google';
 import './globals.css';
-import Navbar from '../components/Navbar';
 
 const publicSans = Public_Sans({
   subsets: ['latin'],
@@ -30,7 +29,6 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={`${publicSans.variable} ${spaceGrotesk.variable}`}>
         {children}
-        <Navbar />
       </body>
     </html>
   );

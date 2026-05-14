@@ -10,7 +10,7 @@ import {
   useJsApiLoader,
 } from '@react-google-maps/api';
 import { AssetSelection, Pipeline, SensorReading, WaterZone } from '../utils/types';
-import { formatFlow, formatPressure, formatTime } from '../utils/format';
+import { formatFlow, formatPressure, formatTds, formatTime } from '../utils/format';
 import { getReadingState, getStatusColor, getStatusLabel } from '../utils/status';
 
 const GOOGLE_MAPS_API_KEY =
@@ -320,6 +320,16 @@ const WaterMap = ({ zone, readings, selectedAsset, onSelectAsset }: MapProps) =>
                   <div>
                     <span>Pressure</span>
                     <strong>{formatPressure(infoState.reading.pressure)}</strong>
+                  </div>
+                  <div>
+                    <span>TDS Reading</span>
+                    <strong>{formatTds(infoState.reading.tds)}</strong>
+                  </div>
+                  <div>
+                    <span>Water Health</span>
+                    <strong className={infoState.reading.water_health === 'Good' ? 'text-emerald-600' : 'text-rose-600'}>
+                      {infoState.reading.water_health}
+                    </strong>
                   </div>
                   <div>
                     <span>Status</span>

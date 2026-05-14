@@ -2,6 +2,18 @@ const { SerialPort, ReadlineParser } = require('serialport');
 const { houses } = require('./network');
 const { normalizeReading, parseArduinoLine } = require('./telemetry');
 
+const hardwareState = {
+  portName: process.env.SERIAL_PORT || null,
+  isOpen: false,
+  lastRawLine: null,
+  lastRawAt: null,
+  lastReading: null,
+  lastReadingAt: null,
+  lastError: null,
+};
+
+const getHardwareStatus = () => ({ ...hardwareState });
+
 const buildMockReading = (house) => {
   const minuteOfDay = new Date().getHours() * 60 + new Date().getMinutes();
   const demandWave = Math.sin((minuteOfDay / 1440) * Math.PI * 2);
@@ -25,36 +37,73 @@ const buildMockReading = (house) => {
 
   return normalizeReading({
     house_id: house.id,
+    flow1: flow_rate,
+    flow2: Math.max(0, flow_rate * (0.75 + Math.random() * 0.2)),
     flow_rate,
     pressure,
+    tds: 280 + (Math.random() - 0.5) * 50,
+    vibration: anomalyChance > 0.92 ? 1 : 0,
+    humidity: 48 + Math.random() * 18,
     is_mock: true,
   });
 };
 
 const setupHardware = async (onDataReceived) => {
   let portName = process.env.SERIAL_PORT;
+  hardwareState.portName = portName || null;
 
   try {
-    if (!portName) {
-      const ports = await SerialPort.list();
-      
-      console.log('=== Active Serial Ports ===');
-      if (ports.length === 0) console.log('  No serial ports detected on this system.');
-      ports.forEach(p => console.log(` - ${p.path} | Manufacturer: ${p.manufacturer || 'Unknown'} | VendorID: ${p.vendorId || 'N/A'}`));
-      console.log('===========================');
-
-      const detectedPort = ports.find((p) => 
-        (p.manufacturer && p.manufacturer.toLowerCase().includes('arduino')) ||
-        (p.vendorId && p.vendorId.toLowerCase() === '2341') ||
-        (p.vendorId && p.vendorId.toLowerCase() === '1a86') || // CH340 serial chip commonly used in Arduino clones
-        (p.manufacturer && p.manufacturer.toLowerCase().includes('wch.cn'))
+    const availablePorts = await SerialPort.list();
+    console.log('=== Active Serial Ports ===');
+    if (availablePorts.length === 0) {
+      console.log('  No serial ports detected on this system.');
+    } else {
+      availablePorts.forEach((p) =>
+        console.log(
+          ` - ${p.path} | Manufacturer: ${p.manufacturer || 'Unknown'} | VendorID: ${p.vendorId || 'N/A'}`,
+        ),
       );
+    }
+    console.log('===========================');
+
+    if (portName) {
+      const configuredPortExists = availablePorts.some(
+        (port) => String(port.path).toLowerCase() === String(portName).toLowerCase(),
+      );
+
+      if (!configuredPortExists) {
+        console.warn(`[Hardware] Configured serial port ${portName} was not found. Trying auto-detection instead.`);
+        hardwareState.lastError = `Configured serial port ${portName} was not found`;
+        portName = null;
+        hardwareState.portName = null;
+      }
+    }
+
+    if (!portName) {
+      const detectedPort = availablePorts.find(
+        (p) =>
+          (p.manufacturer && p.manufacturer.toLowerCase().includes('arduino')) ||
+          (p.vendorId && p.vendorId.toLowerCase() === '2341') ||
+          (p.vendorId && p.vendorId.toLowerCase() === '1a86') || // CH340 serial chip
+          (p.manufacturer && p.manufacturer.toLowerCase().includes('wch.cn')),
+      );
+
       if (detectedPort) {
         portName = detectedPort.path;
+        hardwareState.portName = portName;
         console.log(`Auto-detected Arduino on port: ${portName}`);
       } else {
-        portName = 'COM7'; // fallback
-        console.log(`Could not auto-detect Arduino, falling back to: ${portName}`);
+        // Find the highest COM port as a common heuristic for newly plugged Arduinos
+        if (availablePorts.length > 0) {
+          const sortedPorts = [...availablePorts].sort((a, b) => b.path.localeCompare(a.path));
+          portName = sortedPorts[0].path;
+          hardwareState.portName = portName;
+          console.log(`Could not auto-detect Arduino by ID, trying highest available port: ${portName}`);
+        } else {
+          portName = 'COM7';
+          hardwareState.portName = portName;
+          console.log(`No ports found, using fallback: ${portName}`);
+        }
       }
     }
 
@@ -68,27 +117,52 @@ const setupHardware = async (onDataReceived) => {
 
     port.open((err) => {
       if (err) {
-        console.warn(`Could not open real serial port ${portName}:`, err.message);
-        startMockMode(onDataReceived);
+        hardwareState.isOpen = false;
+        hardwareState.lastError = err.message;
+        console.warn(`[Hardware] FAILED to open serial port ${portName}:`, err.message);
+        console.warn('[Hardware] Ensure the Arduino is connected and no other app (like Arduino IDE) is using the port.');
       } else {
-        console.log(`Successfully connected to Arduino on ${portName}`);
-        startMockMode(onDataReceived);
+        hardwareState.isOpen = true;
+        hardwareState.lastError = null;
+        console.log(`[Hardware] SUCCESS: Connected to Arduino on ${portName}`);
       }
+      // Disabled dummy data generator per user request
+      // startMockMode(onDataReceived);
     });
 
     parser.on('data', (data) => {
+      const line = String(data).trim();
+      hardwareState.lastRawLine = line;
+      hardwareState.lastRawAt = new Date().toISOString();
+      if (line) {
+        console.log(`[Hardware] RAW DATA RECEIVE: "${line}"`);
+      }
       try {
-        const reading = parseArduinoLine(data);
-
+        const reading = parseArduinoLine(line);
         if (reading) {
+          hardwareState.lastReading = reading;
+          hardwareState.lastReadingAt = new Date().toISOString();
+          hardwareState.lastError = null;
           onDataReceived(reading);
+        } else if (line) {
+          hardwareState.lastError = `Unparsed serial line: ${line}`;
         }
       } catch (error) {
-        console.warn('Failed to parse incoming serial data:', data);
+        hardwareState.lastError = error.message;
+        console.warn('[Hardware] Failed to parse incoming data:', line);
       }
     });
+
+    port.on('error', (err) => {
+      hardwareState.isOpen = false;
+      hardwareState.lastError = err.message;
+      console.error('[Hardware] SerialPort Error:', err.message);
+    });
+
   } catch (err) {
-    console.warn('Problem initializing SerialPort:', err.message);
+    hardwareState.isOpen = false;
+    hardwareState.lastError = err.message;
+    console.warn('[Hardware] Critical initialization error:', err.message);
     startMockMode(onDataReceived);
   }
 };
@@ -106,5 +180,4 @@ const startMockMode = (onDataReceived) => {
   }, 4000);
 };
 
-module.exports = { setupHardware };
-
+module.exports = { getHardwareStatus, setupHardware };

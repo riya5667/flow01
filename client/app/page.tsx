@@ -2,526 +2,466 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useSocket } from '../hooks/useSocket';
-import Map from '../components/Map';
-import { AssetSelection } from '../utils/types';
 import {
   Activity,
-  AlertCircle,
-  BrainCircuit,
-  CheckCircle,
-  Database,
+  Bell,
+  CalendarDays,
+  ChevronDown,
+  Download,
   Droplet,
+  FileText,
   Filter,
-  Home,
-  Map as MapIcon,
-  Search,
-  Settings,
-  Zap,
+  Grid2X2,
+  LayoutDashboard,
   Loader2,
+  Search,
+  Settings2,
+  TrendingUp,
+  Zap,
 } from 'lucide-react';
+import { useSocket } from '../hooks/useSocket';
+import { AssetSelection } from '../utils/types';
+import { formatTds } from '../utils/format';
+import ForecastingPanel from '../components/ForecastingPanel';
 import DigitalFootprint from '../components/DigitalFootprint';
 import AquaBot from '../components/AquaBot';
-import ForecastingPanel from '../components/ForecastingPanel';
+
+const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export default function ObservatoryDashboard() {
-  const { network, readings, isConnected, isLoading } = useSocket();
+  const { network, readings, isConnected, isLoading, stats: backendStats, alerts } = useSocket();
   const [selectedAsset, setSelectedAsset] = useState<AssetSelection | null>(null);
   const [activeTab, setActiveTab] = useState<'live' | 'predict' | 'footprint'>('live');
-
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [insights, setInsights] = useState<any[]>([]);
+  const [isSendingReport, setIsSendingReport] = useState(false);
+  const [reportStatus, setReportStatus] = useState<string | null>(null);
 
   const currentReadings = useMemo(() => Object.values(readings || {}), [readings]);
-  const physicalNode = currentReadings.find((r) => r.house_id === 'house_1');
+  const activeZone = network?.zones[0];
+  const physicalNode = currentReadings.find((reading) => reading.house_id === 'house_1');
+  const physicalWaterHealth = physicalNode?.water_health || 'Unknown';
+  const physicalTds = physicalNode?.tds || 0;
+  const flow1 = physicalNode?.flow1 ?? physicalNode?.flow_rate ?? 0;
+  const flow2 = physicalNode?.flow2 ?? 0;
+  const humidity = Number.isFinite(physicalNode?.humidity) ? Number(physicalNode?.humidity) : null;
+  const humidityValue = humidity ?? 0;
+  const measuredWaterLevel = Number.isFinite(physicalNode?.water_level) ? Number(physicalNode?.water_level) : null;
+  const leak = physicalNode?.leak ?? 0;
+  const theft = physicalNode?.theft ?? 0;
+  const buzzer = physicalNode?.buzzer ?? 0;
+  const hardwareAlert = !!physicalNode && (humidityValue > 75 || leak === 1 || theft === 1 || buzzer === 1 || physicalNode.status !== 'Normal');
 
-  let totalSensors = currentReadings.length;
-  let healthyCount = 0;
-  let anomalyCount = 0;
-  let totalDemand = 0;
+  const totals = useMemo(() => {
+    return currentReadings.reduce(
+      (acc, reading) => {
+        acc.demand += reading.flow_rate || 0;
+        if (reading.status === 'Normal') acc.healthy += 1;
+        else acc.alerts += 1;
+        return acc;
+      },
+      { demand: 0, healthy: 0, alerts: 0 },
+    );
+  }, [currentReadings]);
 
-  currentReadings.forEach((r) => {
-    totalDemand += r.flow_rate || 0;
-    if (r.status === 'Normal') healthyCount += 1;
-    else anomalyCount += 1;
+  const totalCumulativeFlow = useMemo(() => {
+    if (!backendStats) return 0;
+    return backendStats.reduce((sum: number, stat: any) => sum + (stat.cumulative_flow_liters || 0), 0);
+  }, [backendStats]);
+
+  const healthyPercent = currentReadings.length
+    ? Math.round((totals.healthy / currentReadings.length) * 100)
+    : 100;
+  const waterLevel = measuredWaterLevel ?? Math.min(94, Math.max(14, ((flow1 + flow2) / 22) * 100 || healthyPercent));
+
+  const monthlyDemand = monthLabels.map((month, index) => {
+    const seasonalOffset = [0.44, 0.3, 0.62, 0.36, 0.68, 0.82, 1, 0.74, 0.96, 0.7, 0.55, 0.78][index];
+    const liveBoost = Math.min(totals.demand * 5, 28);
+    return {
+      month,
+      value: Math.round(120 + seasonalOffset * 780 + liveBoost),
+    };
   });
+  const chartMax = Math.max(...monthlyDemand.map((item) => item.value), 1000);
 
-  const healthyPercent = totalSensors > 0 ? Math.round((healthyCount / totalSensors) * 100) : 100;
-  const anomalyPercent = totalSensors > 0 ? Math.round((anomalyCount / totalSensors) * 100) : 0;
+  const sendWhatsAppReport = async () => {
+    setIsSendingReport(true);
+    setReportStatus(null);
+
+    try {
+      const response = await fetch('/api/whatsapp/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || !payload.ok) {
+        const reason = payload.result?.reason;
+        const message =
+          reason === 'missing_meta_config' || reason === 'missing_config'
+            ? 'Meta WhatsApp is not configured on the server'
+            : payload.error || payload.result?.reason || 'WhatsApp report was not sent';
+
+        throw new Error(message);
+      }
+
+      setReportStatus(`Report sent on WhatsApp${payload.result?.provider ? ` via ${payload.result.provider}` : ''}`);
+    } catch (error: any) {
+      setReportStatus(error?.message || 'Report send failed');
+    } finally {
+      setIsSendingReport(false);
+    }
+  };
 
   useEffect(() => {
     if (!network?.zones.length) return;
     if (!selectedAsset) {
       setSelectedAsset({ type: 'tank', id: network.zones[0].tank.id });
     }
-  }, [network]);
+  }, [network, selectedAsset]);
 
-  const generateInsights = async () => {
-    setIsGenerating(true);
-    try {
-      const res = await fetch('/api/ai-suggestions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          physicalNode,
-          totalDemand,
-          anomalyCount,
-        }),
-      });
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setInsights(data);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  if (isLoading || !network) {
+  if (isLoading || !network || !activeZone) {
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-950 text-white">
+      <div className="flex h-screen items-center justify-center bg-[#f3f3f1] text-[#111]">
         <div className="text-center">
-          <Loader2 className="mx-auto mb-4 h-8 w-8 animate-spin text-sky-400" />
-          <h1 className="text-xl font-semibold">Initializing the command center…</h1>
+          <Loader2 className="mx-auto mb-4 h-8 w-8 animate-spin text-[#38d4e8]" />
+          <h1 className="text-xl font-semibold">Initializing FlowIntel</h1>
         </div>
       </div>
     );
   }
 
-  const activeZone = network.zones[0];
-  const allNodes = activeZone.houses;
-  const orderedNodes = [...allNodes].sort((a, b) => {
-    const aStatus = readings[a.id]?.status === 'Normal' ? 1 : 0;
-    const bStatus = readings[b.id]?.status === 'Normal' ? 1 : 0;
-    return aStatus - bStatus;
-  });
-
-  const stats = [
-    {
-      label: 'Active stations',
-      value: activeZone.houses.length,
-      sub: 'Online in the network',
-      icon: <Database size={18} />,
-      tone: 'from-sky-500/20 via-sky-500/5 to-transparent',
-      color: 'text-sky-600',
-    },
-    {
-      label: 'Critical alerts',
-      value: anomalyCount,
-      sub: 'Needs immediate attention',
-      icon: <AlertCircle size={18} />,
-      tone: 'from-rose-500/20 via-rose-500/5 to-transparent',
-      color: 'text-rose-600',
-    },
-    {
-      label: 'Stable stations',
-      value: healthyCount,
-      sub: 'Running within thresholds',
-      icon: <CheckCircle size={18} />,
-      tone: 'from-emerald-500/20 via-emerald-500/5 to-transparent',
-      color: 'text-emerald-600',
-    },
-    {
-      label: 'Total flow',
-      value: totalDemand.toFixed(1),
-      sub: 'Liters per minute',
-      icon: <Droplet size={18} />,
-      tone: 'from-indigo-500/20 via-indigo-500/5 to-transparent',
-      color: 'text-indigo-600',
-    },
-  ];
-
   return (
-    <div className="relative h-screen overflow-hidden bg-[#f4f7fb] text-slate-900">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-32 -right-32 h-80 w-80 rounded-full bg-gradient-to-br from-sky-200 via-white to-transparent blur-3xl opacity-80 float-slow" />
-        <div className="absolute -bottom-48 -left-24 h-[420px] w-[420px] rounded-full bg-gradient-to-tr from-indigo-200 via-white to-transparent blur-3xl opacity-70 float-slow" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.25),_transparent_55%)]" />
-      </div>
-
-      <div className="relative flex h-full">
-        <aside className="hidden h-full w-[240px] flex-col border-r border-white/60 bg-white/70 px-5 py-6 shadow-[0_10px_40px_rgba(15,23,42,0.08)] backdrop-blur-xl md:flex">
+    <div className="min-h-screen bg-[#e9e9e7] p-4 text-[#101010] sm:p-5 xl:p-6">
+      <div className="mx-auto flex min-h-[calc(100vh-48px)] max-w-[1640px] flex-col rounded-[22px] border border-white/80 bg-[#f7f7f5] p-5 shadow-[0_28px_90px_rgba(20,20,20,0.14)] sm:p-6 xl:p-7">
+        <header className="flex flex-wrap items-center justify-between gap-6">
           <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-2xl bg-gradient-to-br from-sky-600 to-indigo-600 text-white shadow-lg">
-              <Droplet size={18} />
+            <div className="grid h-11 w-11 place-items-center rounded-[14px] bg-[#38d4e8] text-[#064e58]">
+              <Droplet size={25} fill="currentColor" />
             </div>
-            <div>
-              <p className="text-sm font-semibold text-slate-900">FlowIntel</p>
-              <p className="text-xs text-slate-500">Water observatory</p>
-            </div>
+            <span className="text-2xl font-semibold tracking-tight">FlowIntel</span>
           </div>
 
-          <div className="mt-10 flex flex-1 flex-col gap-3 text-sm">
+          <nav className="flex flex-wrap items-center rounded-full bg-white/78 p-1 text-sm font-semibold shadow-[0_10px_28px_rgba(18,18,18,0.06)]">
             <button
               onClick={() => setActiveTab('live')}
-              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 font-medium transition ${
-                activeTab === 'live'
-                  ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/15'
-                  : 'text-slate-600 hover:bg-white'
+              className={`inline-flex items-center gap-2 rounded-full px-5 py-3 transition ${
+                activeTab === 'live' ? 'bg-[#0f6f7a] text-white shadow-lg shadow-[#0f6f7a]/20' : 'text-[#191919]'
               }`}
             >
-              <Home size={18} />
-              Overview
+              <LayoutDashboard size={16} />
+              Dashboard
             </button>
             <button
               onClick={() => setActiveTab('predict')}
-              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 font-medium transition ${
-                activeTab === 'predict'
-                  ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/15'
-                  : 'text-slate-600 hover:bg-white'
+              className={`inline-flex items-center gap-2 rounded-full px-5 py-3 transition ${
+                activeTab === 'predict' ? 'bg-[#0f6f7a] text-white shadow-lg shadow-[#0f6f7a]/20' : 'text-[#191919]'
               }`}
             >
-              <Database size={18} />
-              Forecasting
+              <Activity size={16} />
+              Analytics
             </button>
+            <button className="inline-flex items-center gap-2 rounded-full px-5 py-3 text-[#191919]">
+              <Grid2X2 size={16} />
+              Nodes
+            </button>
+            <Link href="/ai-analysis" className="inline-flex items-center gap-2 rounded-full px-5 py-3 text-[#191919]">
+              <FileText size={16} />
+              AI Report
+            </Link>
             <button
               onClick={() => setActiveTab('footprint')}
-              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 font-medium transition ${
-                activeTab === 'footprint'
-                  ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/15'
-                  : 'text-slate-600 hover:bg-white'
+              className={`inline-flex items-center gap-2 rounded-full px-5 py-3 transition ${
+                activeTab === 'footprint' ? 'bg-[#0f6f7a] text-white shadow-lg shadow-[#0f6f7a]/20' : 'text-[#191919]'
               }`}
             >
-              <Activity size={18} />
-              Sustainability
+              <CalendarDays size={16} />
+              Footprint
             </button>
-          </div>
+          </nav>
 
-          <div className="mt-auto rounded-2xl bg-gradient-to-br from-slate-900 to-slate-700 p-4 text-white shadow-xl">
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-200">Live status</p>
-            <div className="mt-3 flex items-center justify-between">
-              <span className="text-sm font-semibold">{isConnected ? 'Connected' : 'Disconnected'}</span>
-              <span
-                className={`h-2.5 w-2.5 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-rose-400'}`}
-              />
+          <div className="flex items-center gap-3">
+            <button className="grid h-12 w-12 place-items-center rounded-full bg-white text-[#161616] shadow-[0_10px_25px_rgba(18,18,18,0.06)]">
+              <Search size={20} />
+            </button>
+            <button className="relative grid h-12 w-12 place-items-center rounded-full bg-white text-[#161616] shadow-[0_10px_25px_rgba(18,18,18,0.06)]">
+              <Bell size={19} />
+              {alerts.length > 0 && <span className="absolute right-3 top-3 h-2.5 w-2.5 rounded-full bg-[#ff5c35]" />}
+            </button>
+            <div className="flex items-center gap-3 rounded-full bg-white px-2 py-1.5 shadow-[0_10px_25px_rgba(18,18,18,0.06)]">
+              <div className="grid h-10 w-10 place-items-center rounded-full bg-[#0f6f7a] text-sm font-bold text-white">FI</div>
+              <ChevronDown size={18} />
             </div>
-            <p className="mt-2 text-xs text-slate-300">Streaming telemetry across the zone.</p>
           </div>
-        </aside>
+        </header>
 
-        <main className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6 md:px-8">
-            <header className="flex flex-col gap-5">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Smart Indore</p>
-                  <h1 className="text-3xl font-semibold tracking-tight text-slate-900">
-                    Water Intelligence Command Center
-                  </h1>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Real-time monitoring of distribution pressure, flow, and anomalies.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <Link
-                    href="/ai-analysis"
-                    className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-slate-900/20 transition hover:-translate-y-0.5 hover:bg-slate-800"
-                  >
-                    <BrainCircuit size={16} /> AI Analyst
-                  </Link>
-                  <button className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300">
-                    <Settings size={16} /> Customize view
-                  </button>
-                </div>
-              </div>
+        <main className="mt-7 flex flex-1 flex-col">
+          <section className="flex flex-wrap items-start justify-between gap-5">
+            <div>
+              <h1 className="text-[clamp(1.85rem,3.4vw,3rem)] font-semibold leading-none tracking-[-0.04em]">
+                Water Overview
+              </h1>
+              <p className="mt-3 text-base font-medium text-[#6d6d68]">
+                Analyze distribution health to make data-driven decisions
+              </p>
+            </div>
 
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex flex-wrap items-center gap-4">
-                  {stats.map((stat) => (
-                    <div
-                      key={stat.label}
-                      className="reveal-up flex min-w-[210px] flex-1 items-center gap-4 rounded-2xl border border-white/70 bg-white/80 px-4 py-3 shadow-[0_12px_24px_rgba(15,23,42,0.08)] backdrop-blur"
-                    >
-                      <div className={`rounded-2xl bg-gradient-to-br ${stat.tone} p-3 ${stat.color}`}>
-                        {stat.icon}
-                      </div>
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{stat.label}</p>
-                        <p className="text-2xl font-semibold text-slate-900">{stat.value}</p>
-                        <p className="text-xs text-slate-500">{stat.sub}</p>
+            <div className="flex flex-wrap items-center gap-4">
+              <button className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold shadow-[0_10px_25px_rgba(18,18,18,0.06)]">
+                Monthly
+                <ChevronDown size={16} />
+              </button>
+              <button
+                onClick={sendWhatsAppReport}
+                disabled={isSendingReport}
+                className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold shadow-[0_10px_25px_rgba(18,18,18,0.06)] disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSendingReport ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                Send report
+              </button>
+              <button className="inline-flex items-center gap-2 rounded-full bg-[#0f6f7a] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_10px_25px_rgba(15,111,122,0.22)]">
+                <span className="grid h-7 w-7 place-items-center rounded-full bg-[#38d4e8] text-[#064e58]">
+                  <Filter size={16} />
+                </span>
+                Filter
+              </button>
+            </div>
+          </section>
+          {reportStatus && (
+            <div className="mt-3 inline-flex rounded-full bg-white px-4 py-2 text-xs font-bold text-[#0f6f7a] shadow-[0_10px_25px_rgba(18,18,18,0.06)]">
+              {reportStatus}
+            </div>
+          )}
+
+          {activeTab === 'live' && (
+            <div className="mt-7 flex flex-1 flex-col gap-5">
+              <section className="grid gap-5 xl:grid-cols-[1fr_1fr_1.15fr]">
+                <article className="relative min-h-[170px] overflow-hidden rounded-[22px] bg-[#38d4e8] p-5 shadow-[0_18px_45px_rgba(15,111,122,0.18)] xl:p-6">
+                  <div className="absolute inset-y-0 right-0 w-3/5 bg-[linear-gradient(135deg,rgba(255,255,255,0.18)_0_45%,transparent_45%)]" />
+                  <div className="relative z-10 flex h-full flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-lg font-medium tracking-[-0.04em]">Total Flow</h2>
+                      <span className="grid h-10 w-10 place-items-center rounded-full bg-white/90">
+                        <TrendingUp size={19} />
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-semibold tracking-[-0.04em]">{totalCumulativeFlow.toFixed(1)} L</p>
+                      <div className="mt-3 flex items-center gap-3 text-xs font-bold">
+                        <span className="rounded-full bg-white/70 px-3 py-1.5">+ {Math.max(healthyPercent - 80, 4)}%</span>
+                        <span>Than last month</span>
                       </div>
                     </div>
-                  ))}
-                </div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm">
-                    <span
-                      className={`h-2.5 w-2.5 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-rose-400'}`}
-                    />
-                    {isConnected ? 'Live data stream' : 'Stream offline'}
                   </div>
-                  <div className="flex items-center rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm">
-                    <MapIcon size={14} className="mr-2 text-slate-400" />
-                    Zone: {activeZone.name}
+                </article>
+
+                <article className="relative min-h-[170px] overflow-hidden rounded-[22px] bg-white p-5 shadow-[0_18px_45px_rgba(18,18,18,0.06)] xl:p-6">
+                  <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0_42%,rgba(240,240,238,0.9)_42%_62%,transparent_62%)]" />
+                  <div className="relative z-10 flex h-full flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-lg font-medium tracking-[-0.04em]">Live Demand</h2>
+                      <span className="grid h-10 w-10 place-items-center rounded-full bg-[#f7f7f5]">
+                        <Zap size={19} />
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-semibold tracking-[-0.04em]">{totals.demand.toFixed(1)} L/m</p>
+                      <div className="mt-3 flex items-center gap-3 text-xs font-bold">
+                        <span className="rounded-full bg-[#38d4e8] px-3 py-1.5">+ {Math.max(totals.healthy, 1)} stable</span>
+                        <span>Live network load</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+                </article>
 
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-600 shadow-sm">
-                  <Filter size={14} className="text-slate-400" />
-                  Filter
-                </div>
-                <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-600 shadow-sm">
-                  <Search size={16} className="text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search station, node, pipeline…"
-                    className="w-56 bg-transparent text-sm outline-none placeholder:text-slate-400"
-                  />
-                </div>
-                <div className="ml-auto hidden items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-4 py-2 text-xs font-semibold text-slate-500 shadow-sm lg:flex">
-                  <Activity size={14} className="text-emerald-500" />
-                  Telemetry refresh <span className="text-slate-900">2s</span>
-                </div>
-              </div>
-            </header>
+                <article className="relative min-h-[170px] rounded-[22px] bg-white p-5 shadow-[0_18px_45px_rgba(18,18,18,0.06)] xl:p-6">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="text-lg font-medium tracking-[-0.04em]">Water Target</h2>
+                      <p className="mt-2 text-2xl font-semibold tracking-[-0.04em]">{formatTds(physicalTds)}</p>
+                    </div>
+                    <button className="grid h-10 w-10 place-items-center rounded-full bg-[#f7f7f5]">
+                      <Settings2 size={18} />
+                    </button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-[1.35fr_0.75fr_0.25fr] gap-2">
+                    <div className="h-7 rounded-lg bg-[#0f6f7a] bg-[repeating-linear-gradient(135deg,rgba(255,255,255,0.12)_0_2px,transparent_2px_7px)]" />
+                    <div className="h-7 rounded-lg bg-[#38d4e8] bg-[repeating-linear-gradient(135deg,rgba(255,255,255,0.2)_0_2px,transparent_2px_7px)]" />
+                    <div className="h-7 rounded-lg bg-[#c9f8ff] bg-[repeating-linear-gradient(135deg,rgba(255,255,255,0.4)_0_2px,transparent_2px_7px)]" />
+                  </div>
+                  <div className="mt-3 flex justify-between text-[10px] font-semibold text-[#85857f]">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-[#0f6f7a]" />
+                      TDS
+                    </span>
+                    <span className="inline-flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-[#38d4e8]" />
+                      Total Flow
+                    </span>
+                    <span className="inline-flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-[#c9f8ff]" />
+                      Target
+                    </span>
+                  </div>
+                </article>
+              </section>
 
-            {activeTab === 'live' && (
-              <div className="grid flex-1 grid-cols-1 gap-6 xl:grid-cols-[1.55fr_0.9fr]">
-                <div className="flex min-h-[640px] flex-col gap-6">
-                  <section className="flex min-h-[360px] flex-1 flex-col overflow-hidden rounded-3xl border border-white/70 bg-white/85 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur">
-                    <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Network map</p>
-                        <h3 className="text-base font-semibold text-slate-900">Live stations & pipelines</h3>
-                      </div>
-                      <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-                        <span className="rounded-full bg-slate-100 px-3 py-1">All stations</span>
-                        <span className="rounded-full bg-slate-100 px-3 py-1">Alerts</span>
-                      </div>
-                    </div>
-                    <div className="relative flex-1 bg-gradient-to-br from-slate-50 via-white to-slate-100">
-                      <Map
-                        zone={activeZone}
-                        readings={readings}
-                        selectedAsset={selectedAsset}
-                        onSelectAsset={setSelectedAsset}
-                      />
-                    </div>
-                  </section>
-
-                  <section className="flex min-h-[220px] flex-1 flex-col rounded-3xl border border-white/70 bg-white/85 px-5 py-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur overflow-hidden">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.3em] text-slate-400">AI insights</p>
-                        <h3 className="text-base font-semibold text-slate-900">Recommendations & anomaly context</h3>
-                      </div>
-                      <button
-                        onClick={generateInsights}
-                        disabled={isGenerating}
-                        className="inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-xs font-semibold text-indigo-700 shadow-sm transition hover:-translate-y-0.5 hover:bg-indigo-100 disabled:opacity-60"
-                      >
-                        {isGenerating ? (
-                          <Loader2 size={14} className="animate-spin text-indigo-700" />
-                        ) : (
-                          <Zap size={14} className="text-indigo-600" />
-                        )}
-                        Generate insights
-                      </button>
-                    </div>
-                    <div className="mt-4 grid flex-1 grid-cols-1 gap-4 lg:grid-cols-3">
-                      {insights.length > 0 ? (
-                        insights.map((insight, idx) => (
-                          <div
-                            key={idx}
-                            className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-md"
-                          >
-                            <div className="flex items-center gap-2 text-slate-700">
-                              {insight.icon === 'BrainCircuit' ? (
-                                <BrainCircuit size={16} className="text-indigo-500" />
-                              ) : insight.icon === 'AlertTriangle' ? (
-                                <AlertCircle size={16} className="text-rose-500" />
-                              ) : (
-                                <Droplet size={16} className="text-sky-500" />
-                              )}
-                              <h4 className="text-sm font-semibold">{insight.title}</h4>
-                            </div>
-                            <p className="text-xs text-slate-500 leading-relaxed">{insight.description}</p>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="col-span-full flex h-full flex-col items-center justify-center gap-3 text-slate-400">
-                          <BrainCircuit size={28} className="text-slate-300" />
-                          <p className="text-sm">Run AI analysis to surface actionable insights.</p>
-                        </div>
-                      )}
-                    </div>
-                  </section>
-                </div>
-
-                <div className="flex min-h-[640px] flex-col gap-6">
-                  <section className="flex min-h-[360px] flex-1 flex-col rounded-3xl border border-white/70 bg-white/85 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur">
-                    <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Alert queue</p>
-                        <h3 className="text-base font-semibold text-slate-900">Live telemetry feed</h3>
-                      </div>
-                      <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-600">
-                        {anomalyCount} critical
+              <section className="grid gap-5 xl:grid-cols-[0.62fr_1.38fr]">
+                <article className="min-h-[240px] overflow-hidden rounded-[22px] bg-white p-6 shadow-[0_18px_45px_rgba(18,18,18,0.06)] xl:p-7">
+                  <div className="flex h-full items-center justify-between gap-5">
+                    <div className="min-w-[140px]">
+                      <h2 className="text-xl font-semibold tracking-[-0.03em]">Tank Level</h2>
+                      <p className="mt-1 text-sm font-medium text-[#8f8f89]">Animated live reservoir</p>
+                      <span className="mt-4 inline-flex rounded-full bg-[#e6fbff] px-4 py-2 text-sm font-bold text-[#0f6f7a]">
+                        {waterLevel.toFixed(0)}% full
                       </span>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto px-4 py-4">
-                      <div className="space-y-3">
-                        {orderedNodes.map((node) => {
-                          const reading = readings[node.id];
-                          const isRealTime = node.id === 'house_1';
-                          const statusLabel = reading?.status || 'Offline';
-                          const isNormal = statusLabel === 'Normal';
+                    <div className="flex items-end justify-center gap-4">
+                      <div className="relative h-36 w-28 overflow-hidden rounded-b-[30px] rounded-t-[18px] border-[5px] border-[#d9f7fb] bg-[#f7f7f5] shadow-inner">
+                          <div className="absolute inset-x-3 top-4 z-20 flex justify-between">
+                            {[80, 60, 40, 20].map((mark) => (
+                              <span key={mark} className="h-px w-3 bg-[#b7dfe5]" />
+                            ))}
+                          </div>
+                          <div
+                            className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#0f6f7a] via-[#24bcd0] to-[#67e6f4] transition-[height] duration-700 ease-out"
+                            style={{ height: `${waterLevel}%` }}
+                          >
+                            <div className="absolute -top-3 left-[-25%] h-8 w-[150%] animate-[waterWave_3s_ease-in-out_infinite] rounded-[50%] bg-[#c9f8ff]/80" />
+                            <div className="absolute -top-2 left-[-15%] h-7 w-[135%] animate-[waterWave_4.6s_ease-in-out_infinite_reverse] rounded-[50%] bg-white/30" />
+                            <span className="absolute left-8 top-8 h-3 w-3 animate-[bubbleRise_3.8s_ease-in_infinite] rounded-full bg-white/60" />
+                            <span className="absolute right-9 top-16 h-2 w-2 animate-[bubbleRise_4.8s_ease-in_infinite] rounded-full bg-white/50" />
+                            <span className="absolute left-14 top-24 h-2.5 w-2.5 animate-[bubbleRise_4.2s_ease-in_infinite] rounded-full bg-white/45" />
+                          </div>
+                          <div className="absolute inset-x-0 bottom-5 z-30 text-center text-3xl font-semibold tracking-[-0.04em] text-white drop-shadow">
+                            {waterLevel.toFixed(0)}
+                          </div>
+                      </div>
+                    </div>
+                  </div>
+                </article>
 
+                <article className="min-h-[240px] overflow-hidden rounded-[22px] bg-white p-6 shadow-[0_18px_45px_rgba(18,18,18,0.06)] xl:p-7">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xl font-semibold tracking-[-0.03em]">Live Hardware State</h2>
+                      <p className="text-sm font-medium text-[#8f8f89]">Arduino node and environmental sensors</p>
+                    </div>
+                    <span
+                      className={`rounded-full px-4 py-2 text-xs font-bold ${
+                        hardwareAlert ? 'bg-[#ffe7df] text-[#b73717]' : 'bg-[#e6fbff] text-[#0f6f7a]'
+                      }`}
+                    >
+                      {hardwareAlert ? physicalNode?.status || 'Alert' : 'Normal'}
+                    </span>
+                  </div>
+                  <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    {[
+                      ['Flow 1', `${flow1.toFixed(2)} L/m`],
+                      ['Flow 2', `${flow2.toFixed(2)} L/m`],
+                      ['Humidity', humidity === null ? 'Waiting' : `${humidity.toFixed(0)}%`],
+                      ['Leakage', leak === 1 ? 'Found' : 'Clear'],
+                      ['Theft', theft === 1 ? 'Found' : 'Clear'],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-2xl bg-[#f7f7f5] p-4">
+                        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#999991]">{label}</p>
+                        <p className="mt-2 text-xl font-semibold tracking-[-0.03em]">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              </section>
+
+              <section className="grid flex-1 gap-5">
+                <article className="rounded-[22px] bg-white p-6 shadow-[0_18px_45px_rgba(18,18,18,0.06)] xl:p-7">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-2xl font-medium tracking-[-0.04em]">Water Flow Statistics</h2>
+                      <p className="mt-1 text-sm font-medium text-[#8f8f89]">
+                        Stable stations: {healthyPercent}% &bull; Health: {physicalWaterHealth}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-xs font-bold">
+                      <button className="inline-flex items-center gap-2 rounded-full bg-[#f4f4f2] px-4 py-2">
+                        Flow Overview
+                        <ChevronDown size={15} />
+                      </button>
+                      <button className="inline-flex items-center gap-2 rounded-full bg-[#f4f4f2] px-4 py-2">
+                        Summary
+                        <ChevronDown size={15} />
+                      </button>
+                      <button className="inline-flex items-center gap-2 rounded-full bg-[#0f6f7a] px-4 py-2 text-white">
+                        Yearly
+                        <ChevronDown size={15} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-7 grid min-h-[340px] grid-cols-[58px_1fr] gap-5">
+                    <div className="flex flex-col justify-between pb-9 pt-1 text-xs font-semibold text-[#5f5f59]">
+                      <span>$1000</span>
+                      <span>$750</span>
+                      <span>$500</span>
+                      <span>$25</span>
+                      <span>$0</span>
+                    </div>
+                    <div className="relative">
+                      <div className="absolute inset-x-0 top-0 h-full">
+                        {[0, 1, 2, 3, 4].map((line) => (
+                          <div
+                            key={line}
+                            className="absolute left-0 right-0 border-t border-dashed border-[#deded9]"
+                            style={{ top: `${line * 23}%` }}
+                          />
+                        ))}
+                      </div>
+                      <div className="relative z-10 grid h-full grid-cols-12 items-end gap-4 pb-9">
+                        {monthlyDemand.map((item) => {
+                          const height = Math.max(14, (item.value / chartMax) * 100);
+                          const isSelected = item.month === 'Jun';
                           return (
-                            <div
-                              key={node.id}
-                              onClick={() => setSelectedAsset({ type: 'house', id: node.id })}
-                              className={`flex items-center justify-between gap-3 rounded-2xl border px-3 py-3 text-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-                                selectedAsset?.id === node.id
-                                  ? 'border-sky-200 bg-sky-50/40'
-                                  : 'border-slate-200 bg-white/95'
-                              }`}
+                            <button
+                              key={item.month}
+                              className="group flex h-full min-w-0 flex-col items-center justify-end gap-3"
+                              aria-label={`${item.month} demand ${item.value}`}
                             >
-                              <div className="flex items-center gap-3">
-                                <div
-                                  className={`grid h-10 w-10 place-items-center rounded-2xl text-white shadow-sm ${
-                                    isRealTime
-                                      ? 'bg-indigo-500 shadow-indigo-400/30'
-                                      : isNormal
-                                        ? 'bg-emerald-400/90'
-                                        : 'bg-rose-500/90'
-                                  }`}
-                                >
-                                  <MapIcon size={16} />
-                                </div>
-                                <div>
-                                  <div className="flex items-center gap-2">
-                                    <p className="font-semibold text-slate-900">{node.name}</p>
-                                    {isRealTime && (
-                                      <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-700">
-                                        hardware
-                                      </span>
-                                    )}
-                                  </div>
-                                  <p className="text-xs text-slate-500">{node.label}</p>
-                                </div>
-                              </div>
-                              <div className="flex flex-col items-end gap-1">
-                                <span
-                                  className={`rounded-full border px-3 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                                    isNormal
-                                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                      : 'border-rose-200 bg-rose-50 text-rose-700'
-                                  }`}
-                                >
-                                  {statusLabel}
+                              {isSelected && (
+                                <span className="mb-1 rounded-2xl bg-white px-4 py-3 text-left text-sm font-semibold shadow-[0_12px_32px_rgba(18,18,18,0.16)]">
+                                  <span className="block text-[11px] text-[#8c8c86]">Flow</span>
+                                  {item.value}.00
                                 </span>
-                                <span className="text-base font-semibold text-slate-900">
-                                  {reading?.flow_rate?.toFixed(1) || '0.0'} L/m
-                                </span>
-                              </div>
-                            </div>
+                              )}
+                              <span
+                                className="w-full rounded-t-xl bg-[#38d4e8] bg-[repeating-linear-gradient(135deg,rgba(255,255,255,0.26)_0_2px,transparent_2px_7px)] transition group-hover:bg-[#0f6f7a]"
+                                style={{ height: `${height}%` }}
+                              />
+                              <span className="text-xs font-medium text-[#5f5f59]">{item.month}</span>
+                            </button>
                           );
                         })}
                       </div>
                     </div>
-                  </section>
+                  </div>
+                </article>
+              </section>
 
-                  <section className="flex min-h-[240px] flex-1 flex-col rounded-3xl border border-white/70 bg-white/85 px-5 py-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Network health</p>
-                        <h3 className="text-base font-semibold text-slate-900">Alert distribution</h3>
-                      </div>
-                      <span className="text-xs font-semibold text-slate-500">Updated just now</span>
-                    </div>
+            </div>
+          )}
 
-                    <div className="mt-4 flex flex-1 flex-row items-stretch gap-8">
-                      <div
-                        className="relative grid h-52 w-52 place-items-center rounded-full"
-                        style={{
-                          background: `conic-gradient(#ef4444 0% ${anomalyPercent}%, #10b981 ${anomalyPercent}% ${
-                            anomalyPercent + healthyPercent
-                          }%, #e2e8f0 ${anomalyPercent + healthyPercent}% 100%)`,
-                        }}
-                      >
-                        <div className="grid h-32 w-32 place-items-center rounded-full bg-white shadow-inner">
-                          <div className="text-center">
-                            <p className="text-2xl font-semibold text-slate-900">{healthyPercent}%</p>
-                            <p className="text-[10px] uppercase tracking-wider text-slate-400">Stable</p>
-                          </div>
-                        </div>
-                      </div>
+          {activeTab === 'predict' && (
+            <div className="mt-4 min-h-0 flex-1 overflow-hidden rounded-[24px] bg-white p-6 shadow-[0_18px_45px_rgba(18,18,18,0.06)]">
+              <ForecastingPanel totalDemand={totals.demand} />
+            </div>
+          )}
 
-                      <div className="flex flex-1 flex-col gap-4">
-                        <div className="flex flex-col gap-3 text-xs font-medium text-slate-600">
-                          <div className="flex items-center gap-2">
-                            <span className="h-2.5 w-2.5 rounded-sm bg-rose-500" />
-                            <span>
-                              <strong className="text-slate-900">{anomalyCount}</strong> Critical
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="h-2.5 w-2.5 rounded-sm bg-amber-400" />
-                            <span>
-                              <strong className="text-slate-900">0</strong> Watchlist
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />
-                            <span>
-                              <strong className="text-slate-900">{healthyCount}</strong> Normal
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="h-2.5 w-2.5 rounded-sm bg-slate-200" />
-                            <span>
-                              <strong className="text-slate-900">0</strong> No data
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="grid flex-1 grid-cols-2 gap-3 auto-rows-fr">
-                          <div className="rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm">
-                            <p className="text-[10px] uppercase tracking-wider text-slate-400">Total stations</p>
-                            <p className="text-lg font-semibold text-slate-900">{activeZone.houses.length}</p>
-                          </div>
-                          <div className="rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm">
-                            <p className="text-[10px] uppercase tracking-wider text-slate-400">Online rate</p>
-                            <p className="text-lg font-semibold text-slate-900">{healthyPercent}%</p>
-                          </div>
-                          <div className="rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm">
-                            <p className="text-[10px] uppercase tracking-wider text-slate-400">Pressure avg</p>
-                            <p className="text-lg font-semibold text-slate-900">
-                              {(() => {
-                                const pressures = currentReadings
-                                  .map((r) => r.pressure)
-                                  .filter((p) => typeof p === 'number');
-                                if (!pressures.length) return '--';
-                                const avg = pressures.reduce((sum, p) => sum + (p as number), 0) / pressures.length;
-                                return `${avg.toFixed(1)} kPa`;
-                              })()}
-                            </p>
-                          </div>
-                          <div className="rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm">
-                            <p className="text-[10px] uppercase tracking-wider text-slate-400">Flow rate</p>
-                            <p className="text-lg font-semibold text-slate-900">{totalDemand.toFixed(1)} L/m</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </section>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'predict' && <ForecastingPanel totalDemand={totalDemand} />}
-            {activeTab === 'footprint' && <DigitalFootprint />}
-          </div>
+          {activeTab === 'footprint' && (
+            <div className="mt-4 min-h-0 flex-1 overflow-hidden rounded-[24px] bg-white p-6 shadow-[0_18px_45px_rgba(18,18,18,0.06)]">
+              <DigitalFootprint />
+            </div>
+          )}
         </main>
       </div>
 
-      <AquaBot context={{ totalDemand, anomalyCount, network, activeZone }} />
+      <AquaBot context={{ totalDemand: totals.demand, anomalyCount: totals.alerts, network, activeZone }} />
     </div>
   );
 }

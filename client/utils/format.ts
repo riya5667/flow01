@@ -2,6 +2,8 @@ export const formatFlow = (value?: number) => `${(value || 0).toFixed(1)} L/min`
 
 export const formatPressure = (value?: number) => `${(value || 0).toFixed(1)} psi`;
 
+export const formatTds = (value?: number) => `${(value || 0).toFixed(0)} ppm`;
+
 export const formatTime = (value?: string) => {
   if (!value) {
     return 'Awaiting telemetry';
