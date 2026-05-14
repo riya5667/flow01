@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useRef, useEffect } from 'react';
-import { MessageSquare, X, Send, Bot, User } from 'lucide-react';
+import { MessageSquare, X, Send, Bot, User, Paperclip, Loader2, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
 
 export default function AquaBot({ context }: { context: any }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -9,7 +9,11 @@ export default function AquaBot({ context }: { context: any }) {
   }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (messagesEndRef.current) {
@@ -17,11 +21,10 @@ export default function AquaBot({ context }: { context: any }) {
     }
   }, [messages]);
 
-  const sendMessage = async () => {
-    if (!input.trim() || loading) return;
+  const performSend = async (textToSend: string) => {
+    if (!textToSend.trim() || loading) return;
 
-    const userMessage = input.trim();
-    setMessages(prev => [...prev, { role: 'user', text: userMessage }]);
+    setMessages(prev => [...prev, { role: 'user', text: textToSend }]);
     setInput('');
     setLoading(true);
 
@@ -29,14 +32,68 @@ export default function AquaBot({ context }: { context: any }) {
       const res = await fetch('/api/aquabot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage, context })
+        body: JSON.stringify({ message: textToSend, context })
       });
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'bot', text: data.reply }]);
+      
+      if (voiceMode && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(data.reply);
+        window.speechSynthesis.speak(utterance);
+      }
     } catch (error) {
       setMessages(prev => [...prev, { role: 'bot', text: 'Sorry, I am having trouble connecting to the network.' }]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const sendMessage = () => performSend(input);
+
+  const startListening = () => {
+    if (typeof window === 'undefined') return;
+    const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionAPI) {
+      alert("Speech recognition is not supported in this browser.");
+      return;
+    }
+    const recognition = new SpeechRecognitionAPI();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      performSend(transcript);
+    };
+    recognition.start();
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch('/api/rag/ingest', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setMessages(prev => [...prev, { role: 'bot', text: `Success: ${data.message}` }]);
+      } else {
+        setMessages(prev => [...prev, { role: 'bot', text: `Error: ${data.error}` }]);
+      }
+    } catch (error) {
+      setMessages(prev => [...prev, { role: 'bot', text: 'Failed to upload document.' }]);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -56,9 +113,22 @@ export default function AquaBot({ context }: { context: any }) {
             <Bot size={20} />
             <h3 className="font-bold">AquaBot (IA)</h3>
           </div>
-          <button onClick={() => setIsOpen(false)} className="hover:bg-white/20 p-1 rounded-lg transition-colors">
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => {
+                setVoiceMode(!voiceMode);
+                if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                  window.speechSynthesis.cancel();
+                }
+              }} 
+              className="hover:bg-white/20 p-1 rounded-lg transition-colors"
+              title={voiceMode ? "Mute Voice" : "Enable Voice"}
+            >
+              {voiceMode ? <Volume2 size={20} /> : <VolumeX size={20} />}
+            </button>
+            <button onClick={() => setIsOpen(false)} className="hover:bg-white/20 p-1 rounded-lg transition-colors">
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         {/* Chat window */}
@@ -88,14 +158,36 @@ export default function AquaBot({ context }: { context: any }) {
 
         {/* Input */}
         <div className="p-3 bg-white border-t border-slate-200 rounded-b-2xl">
-          <div className="flex items-center gap-2 bg-slate-100 p-1 pl-4 rounded-xl border border-slate-200 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
+          <div className="flex items-center gap-2 bg-slate-100 p-1 pl-2 rounded-xl border border-slate-200 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileUpload} 
+              accept=".txt,.md,.json,.pdf" 
+              className="hidden" 
+            />
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="p-2 text-slate-500 hover:text-indigo-600 transition-colors disabled:opacity-50"
+              title="Upload Knowledge Document"
+            >
+              {uploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
+            </button>
+            <button 
+              onClick={isListening ? undefined : startListening}
+              className={`p-2 transition-colors ${isListening ? 'text-red-500 animate-pulse' : 'text-slate-500 hover:text-indigo-600'}`}
+              title="Voice Input"
+            >
+              {isListening ? <Mic size={18} /> : <MicOff size={18} />}
+            </button>
             <input 
               type="text" 
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && sendMessage()}
               placeholder="Ask the AI a question..."
-              className="flex-1 bg-transparent border-none outline-none text-sm text-slate-800 py-1"
+              className="flex-1 bg-transparent border-none outline-none text-sm text-slate-800 py-1 pl-1"
             />
             <button 
               onClick={sendMessage}
