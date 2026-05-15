@@ -1,6 +1,6 @@
 // ========================================
 // SMART WATER MONITORING SYSTEM
-// ARDUINO UNO
+// OPTIMIZED FINAL VERSION
 // ========================================
 
 // ---------- FLOW SENSOR VARIABLES ----------
@@ -17,7 +17,8 @@ const byte flowSensor2Pin = 3;
 const byte vibrationPin = 4;
 
 const byte humidityPin = A0;
-const byte soilMoisturePin = A1;
+const byte tdsPin = A2;
+const byte soilMoisturePin = A3;
 
 const byte trigPin = 8;
 const byte echoPin = 9;
@@ -28,29 +29,32 @@ const byte buzzerPin = 10;
 const float tankEmptyDistanceCm = 25.0;
 const float tankFullDistanceCm = 4.0;
 
-const int lowWaterLevelPercent = 20;
-const int leakDropThresholdPercent = 5;
-
-// ---------- TIMERS ----------
-unsigned long currentTime = 0;
-unsigned long cloopTime = 0;
-
-// ---------- WATER LEVEL ----------
+// ---------- VARIABLES ----------
 float lastValidDistance = 0.0;
 
-int previousWaterLevel = -1;
+unsigned long currentTime = 0;
+unsigned long previousTime = 0;
+
 
 // ========================================
-// FLOW SENSOR INTERRUPTS
+// FLOW INTERRUPTS
 // ========================================
-void flow1Pulse() { flow1Frequency++; }
+void flow1Pulse()
+{
+  flow1Frequency++;
+}
 
-void flow2Pulse() { flow2Frequency++; }
+void flow2Pulse()
+{
+  flow2Frequency++;
+}
+
 
 // ========================================
-// ULTRASONIC DISTANCE FUNCTION
+// ULTRASONIC FUNCTION
 // ========================================
-float readDistanceCm() {
+float readDistanceCm()
+{
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
 
@@ -59,78 +63,96 @@ float readDistanceCm() {
 
   digitalWrite(trigPin, LOW);
 
-  long duration = pulseIn(echoPin, HIGH, 30000);
+  long duration = pulseIn(
+    echoPin,
+    HIGH,
+    30000
+  );
 
-  // No reading
-  if (duration == 0) {
+  if (duration == 0)
+  {
     return lastValidDistance;
   }
 
-  float distance = duration * 0.0343 / 2.0;
+  float distance =
+    duration * 0.0343 / 2.0;
+
+  // Filter invalid values
+  if (distance <= 0 || distance > 400)
+  {
+    return lastValidDistance;
+  }
 
   return distance;
 }
 
+
 // ========================================
-// WATER LEVEL CALCULATION
+// WATER LEVEL FUNCTION
 // ========================================
-int calculateLevelPercent(float distanceCm) {
-  float level = ((tankEmptyDistanceCm - distanceCm) /
-                 (tankEmptyDistanceCm - tankFullDistanceCm)) *
-                100.0;
+int calculateLevelPercent(float distanceCm)
+{
+  float level =
+    (
+      (tankEmptyDistanceCm - distanceCm)
+      /
+      (tankEmptyDistanceCm - tankFullDistanceCm)
+    ) * 100.0;
 
   return constrain((int)level, 0, 100);
 }
 
+
 // ========================================
 // SETUP
 // ========================================
-void setup() {
+void setup()
+{
   Serial.begin(9600);
 
-  // Flow sensors
   pinMode(flowSensor1Pin, INPUT_PULLUP);
   pinMode(flowSensor2Pin, INPUT_PULLUP);
 
-  // Vibration sensor
-  pinMode(vibrationPin, INPUT);
+  pinMode(vibrationPin, INPUT_PULLUP);
 
-  // Humidity sensor
   pinMode(humidityPin, INPUT);
-
-  // Soil moisture sensor
+  pinMode(tdsPin, INPUT);
   pinMode(soilMoisturePin, INPUT);
 
-  // Ultrasonic
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
 
-  // Buzzer
   pinMode(buzzerPin, OUTPUT);
 
-  // Attach interrupts
-  attachInterrupt(digitalPinToInterrupt(flowSensor1Pin), flow1Pulse, RISING);
+  attachInterrupt(
+    digitalPinToInterrupt(flowSensor1Pin),
+    flow1Pulse,
+    RISING
+  );
 
-  attachInterrupt(digitalPinToInterrupt(flowSensor2Pin), flow2Pulse, RISING);
-
-  currentTime = millis();
-  cloopTime = currentTime;
+  attachInterrupt(
+    digitalPinToInterrupt(flowSensor2Pin),
+    flow2Pulse,
+    RISING
+  );
 
   Serial.println("SMART WATER SYSTEM STARTED");
 }
 
+
 // ========================================
-// MAIN LOOP
+// LOOP
 // ========================================
-void loop() {
+void loop()
+{
   currentTime = millis();
 
-  // Update every 1 second
-  if (currentTime - cloopTime >= 1000) {
-    cloopTime = currentTime;
+  if (currentTime - previousTime >= 1000)
+  {
+    previousTime = currentTime;
 
     // ========================================
-    // FLOW SENSOR READINGS
+    // FLOW SENSORS
     // ========================================
 
     noInterrupts();
@@ -146,14 +168,16 @@ void loop() {
     flow1Rate = flow1Pulses / 7.5;
     flow2Rate = flow2Pulses / 7.5;
 
-    // Noise filtering
-    if (flow1Rate < 0.1) {
-      flow1Rate = 0.0;
+    if (flow1Rate < 0.1)
+    {
+      flow1Rate = 0;
     }
 
-    if (flow2Rate < 0.1) {
-      flow2Rate = 0.0;
+    if (flow2Rate < 0.1)
+    {
+      flow2Rate = 0;
     }
+
 
     // ========================================
     // VIBRATION SENSOR
@@ -161,10 +185,11 @@ void loop() {
 
     int vibrationDetected = 0;
 
-    // Change HIGH/LOW if reversed
-    if (digitalRead(vibrationPin) == LOW) {
+    if (digitalRead(vibrationPin) == LOW)
+    {
       vibrationDetected = 1;
     }
+
 
     // ========================================
     // HUMIDITY SENSOR
@@ -172,16 +197,29 @@ void loop() {
 
     long humidityTotal = 0;
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 10; i++)
+    {
       humidityTotal += analogRead(humidityPin);
       delay(2);
     }
 
-    int humidityRaw = humidityTotal / 10;
+    int humidityRaw =
+      humidityTotal / 10;
 
-    int humidityPercent = map(humidityRaw, 1023, 0, 0, 100);
+    int humidityPercent = map(
+      humidityRaw,
+      1023,
+      0,
+      0,
+      100
+    );
 
-    humidityPercent = constrain(humidityPercent, 0, 100);
+    humidityPercent = constrain(
+      humidityPercent,
+      0,
+      100
+    );
+
 
     // ========================================
     // SOIL MOISTURE SENSOR
@@ -189,76 +227,143 @@ void loop() {
 
     long soilTotal = 0;
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 15; i++)
+    {
       soilTotal += analogRead(soilMoisturePin);
-      delay(2);
+      delay(5);
     }
 
-    int soilRaw = soilTotal / 10;
+    int soilRaw =
+      soilTotal / 15;
 
-    int soilMoisturePercent = map(soilRaw, 1023, 0, 0, 100);
+    // Calibrate according to your sensor
+    int soilMoisturePercent = map(
+      soilRaw,
+      900,
+      350,
+      0,
+      100
+    );
 
-    soilMoisturePercent = constrain(soilMoisturePercent, 0, 100);
+    soilMoisturePercent = constrain(
+      soilMoisturePercent,
+      0,
+      100
+    );
+
+
+    // ========================================
+    // TDS SENSOR
+    // ========================================
+
+    long tdsTotal = 0;
+
+    for (int i = 0; i < 30; i++)
+    {
+      tdsTotal += analogRead(tdsPin);
+      delay(10);
+    }
+
+    float tdsRaw =
+      tdsTotal / 30.0;
+
+    float voltage =
+      tdsRaw * 5.0 / 1024.0;
+
+    float tdsPpm =
+    (
+      133.42 * voltage * voltage * voltage
+      - 255.86 * voltage * voltage
+      + 857.39 * voltage
+    ) * 0.5;
+
+    if (tdsPpm < 0)
+    {
+      tdsPpm = 0;
+    }
+
 
     // ========================================
     // ULTRASONIC SENSOR
     // ========================================
 
-    float distanceCm = readDistanceCm();
+    float distanceCm =
+      readDistanceCm();
 
-    lastValidDistance = distanceCm;
+    lastValidDistance =
+      distanceCm;
 
-    int waterLevelPercent = calculateLevelPercent(distanceCm);
+    int waterLevelPercent =
+      calculateLevelPercent(distanceCm);
+
 
     // ========================================
-    // LEAK & THEFT DETECTION (Soil Moisture + Flow Meter Comparison)
+    // FLOW DIFFERENCE
+    // ========================================
+
+    float flowMismatch =
+      abs(flow1Rate - flow2Rate);
+
+
+    // ========================================
+    // LEAK DETECTION
     // ========================================
 
     int leakDetected = 0;
-    int theftDetected = 0;
 
-    // Compare the reading and behavior of both flow meters
-    float flowMismatch = 0.0;
-    if (flow1Rate > flow2Rate) {
-      flowMismatch = flow1Rate - flow2Rate;
-    } else {
-      flowMismatch = flow2Rate - flow1Rate;
-    }
-
-    bool halfMeterDrop =
-      (flow1Rate > 0.1 && flow2Rate <= flow1Rate * 0.5) ||
-      (flow2Rate > 0.1 && flow1Rate <= flow2Rate * 0.5);
-
-    // If one meter reads half or less than the other, flag theft.
-    if (halfMeterDrop) {
-      theftDetected = 1;
-    }
-    // Wet soil means leakage near the pipe.
-    else if (soilMoisturePercent >= 55) {
+    if (
+      soilMoisturePercent >= 55 ||
+      flowMismatch >= 0.5
+    )
+    {
       leakDetected = 1;
     }
-    // Dry soil plus abnormal flow drop/mismatch indicates possible theft.
-    else if (soilMoisturePercent <= 20 && (flowMismatch >= 2.0 || (flow1Rate > 0.1 && flow2Rate <= flow1Rate * 0.65))) {
-      theftDetected = 1;
-    }
-    // A smaller continuous discrepancy indicates leakage when moisture is present.
-    else if (flowMismatch >= 0.3) {
-      leakDetected = 1;
-    }
+
 
     // ========================================
-    // BUZZER CONTROL
+    // THEFT DETECTION
+    // ========================================
+
+    int theftDetected = 0;
+
+    bool halfMeterDrop =
+      (
+        flow1Rate > 0.1 &&
+        flow2Rate <= flow1Rate * 0.5
+      )
+      ||
+      (
+        flow2Rate > 0.1 &&
+        flow1Rate <= flow2Rate * 0.5
+      );
+
+    if (halfMeterDrop)
+    {
+      theftDetected = 1;
+    }
+
+
+    // ========================================
+    // BUZZER
     // ========================================
 
     int buzzerState = 0;
 
-    if (vibrationDetected == 1 || leakDetected == 1 || theftDetected == 1) {
+    if (
+      vibrationDetected == 1 ||
+      leakDetected == 1 ||
+      theftDetected == 1
+    )
+    {
       buzzerState = 1;
 
       tone(buzzerPin, 2000);
-    } else {
+    }
+    else
+    {
       noTone(buzzerPin);
     }
+
 
     // ========================================
     // SERIAL OUTPUT
@@ -278,6 +383,9 @@ void loop() {
 
     Serial.print(",SOIL:");
     Serial.print(soilMoisturePercent);
+
+    Serial.print(",TDS:");
+    Serial.print((int)tdsPpm);
 
     Serial.print(",DISTANCE:");
     Serial.print(distanceCm, 2);

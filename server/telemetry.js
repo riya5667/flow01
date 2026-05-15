@@ -27,6 +27,18 @@ const deriveWaterHealth = (tds) => {
   return numericTds <= 500 ? 'Good' : 'Bad';
 };
 
+const normalizeTdsReading = (value) => {
+  const numericTds = toSensorNumber(value);
+  const highReadingThreshold = Number(process.env.TDS_HIGH_READING_THRESHOLD || 1000);
+  const highReadingDivisor = Number(process.env.TDS_HIGH_READING_DIVISOR || 25);
+
+  if (numericTds > highReadingThreshold && highReadingDivisor > 0) {
+    return numericTds / highReadingDivisor;
+  }
+
+  return numericTds;
+};
+
 const HUMIDITY_THRESHOLD = Number(process.env.HUMIDITY_ALERT_THRESHOLD || 75);
 const FLOW_STOP_THRESHOLD = Number(process.env.FLOW_STOP_THRESHOLD || 0.05);
 const LOW_WATER_LEVEL_THRESHOLD = Number(process.env.LOW_WATER_LEVEL_THRESHOLD || 20);
@@ -35,6 +47,7 @@ const SOIL_DRY_THRESHOLD = Number(process.env.SOIL_DRY_THRESHOLD || 20);
 const FLOW_MISMATCH_LEAK_THRESHOLD = Number(process.env.FLOW_MISMATCH_LEAK_THRESHOLD || 0.3);
 const FLOW_MISMATCH_THEFT_THRESHOLD = Number(process.env.FLOW_MISMATCH_THEFT_THRESHOLD || 2);
 const FLOW_HALF_THEFT_RATIO = Number(process.env.FLOW_HALF_THEFT_RATIO || 0.5);
+const TDS_MAX_PPM = Number(process.env.TDS_MAX_PPM || 10000);
 
 const deriveMoistureFlowFlags = ({ flow_rate, flow1, flow2, soil = 0, hasSoilReading = soil !== undefined && soil !== null && soil !== '', leak = 0, theft = 0 }) => {
   const sensorFlow1 = Number(flow1 ?? flow_rate ?? 0);
@@ -189,7 +202,8 @@ const normalizeReading = (input) => {
   const flow2 = clamp(toSensorNumber(input.flow2 ?? input.FLOW2), 0, 100);
   const flowRate = clamp(toSensorNumber(input.flow_rate ?? input.flowRate, flow1 + flow2), 0, 200);
   const pressure = clamp(toSensorNumber(input.pressure), 0, 100);
-  const tdsValue = clamp(toSensorNumber(input.tds), 0, 5000);
+  const tdsRaw = toSensorNumber(input.tds_raw ?? input.tdsRaw ?? input.TDSRAW, 0);
+  const tdsValue = clamp(normalizeTdsReading(input.tds), 0, TDS_MAX_PPM);
   const vibration = toSensorNumber(input.vibration ?? input.VIBRATION) === 1 ? 1 : 0;
   const humidity = clamp(toSensorNumber(input.humidity ?? input.HUMIDITY), 0, 100);
   const rawSoil = input.soil ?? input.SOIL;
@@ -217,6 +231,7 @@ const normalizeReading = (input) => {
     flow_rate: Number(flowRate.toFixed(2)),
     pressure: Number(pressure.toFixed(2)),
     tds: Number(tdsValue.toFixed(2)),
+    tds_raw: Number(tdsRaw.toFixed(2)),
     vibration,
     humidity: Number(humidity.toFixed(2)),
     soil: Number(soil.toFixed(2)),
@@ -265,7 +280,7 @@ const parseArduinoLine = (line) => {
   }
 
   const sensorPairs = parseKeyValueLine(trimmed);
-  if (sensorPairs && (sensorPairs.FLOW !== undefined || sensorPairs.FLOW1 !== undefined || sensorPairs.FLOW2 !== undefined || sensorPairs.VIBRATION !== undefined || sensorPairs.HUMIDITY !== undefined || sensorPairs.SOIL !== undefined || sensorPairs.Y !== undefined || sensorPairs.DISTANCE !== undefined || sensorPairs.LEVEL !== undefined || sensorPairs.ULTRASONIC !== undefined || sensorPairs.LEAK !== undefined || sensorPairs.THEFT !== undefined || sensorPairs.BUZZER !== undefined)) {
+  if (sensorPairs && (sensorPairs.FLOW !== undefined || sensorPairs.FLOW1 !== undefined || sensorPairs.FLOW2 !== undefined || sensorPairs.VIBRATION !== undefined || sensorPairs.HUMIDITY !== undefined || sensorPairs.SOIL !== undefined || sensorPairs.TDS !== undefined || sensorPairs.TDSRAW !== undefined || sensorPairs.Y !== undefined || sensorPairs.DISTANCE !== undefined || sensorPairs.LEVEL !== undefined || sensorPairs.ULTRASONIC !== undefined || sensorPairs.LEAK !== undefined || sensorPairs.THEFT !== undefined || sensorPairs.BUZZER !== undefined)) {
     return normalizeReading({
       house_id: 'house_1',
       flow1: sensorPairs.FLOW1 ?? sensorPairs.FLOW,
@@ -273,6 +288,8 @@ const parseArduinoLine = (line) => {
       vibration: sensorPairs.VIBRATION,
       humidity: sensorPairs.HUMIDITY ?? sensorPairs.Y,
       soil: sensorPairs.SOIL,
+      tds: sensorPairs.TDS,
+      tds_raw: sensorPairs.TDSRAW,
       distance: sensorPairs.DISTANCE,
       level: sensorPairs.LEVEL,
       ultrasonic: sensorPairs.ULTRASONIC,
