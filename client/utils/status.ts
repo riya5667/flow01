@@ -8,6 +8,8 @@ export const getStatusColor = (status: SensorStatus) => {
       return '#f2c14e';
     case 'Leak Risk':
     case 'No Flow':
+    case 'Water Leakage':
+    case 'Water Theft':
       return '#d84f4f';
     default:
       return '#687279';

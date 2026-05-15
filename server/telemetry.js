@@ -30,23 +30,55 @@ const deriveWaterHealth = (tds) => {
 const HUMIDITY_THRESHOLD = Number(process.env.HUMIDITY_ALERT_THRESHOLD || 75);
 const FLOW_STOP_THRESHOLD = Number(process.env.FLOW_STOP_THRESHOLD || 0.05);
 const LOW_WATER_LEVEL_THRESHOLD = Number(process.env.LOW_WATER_LEVEL_THRESHOLD || 20);
+const SOIL_LEAK_THRESHOLD = Number(process.env.SOIL_LEAK_THRESHOLD || 55);
+const SOIL_DRY_THRESHOLD = Number(process.env.SOIL_DRY_THRESHOLD || 20);
+const FLOW_MISMATCH_LEAK_THRESHOLD = Number(process.env.FLOW_MISMATCH_LEAK_THRESHOLD || 0.3);
+const FLOW_MISMATCH_THEFT_THRESHOLD = Number(process.env.FLOW_MISMATCH_THEFT_THRESHOLD || 2);
+const FLOW_HALF_THEFT_RATIO = Number(process.env.FLOW_HALF_THEFT_RATIO || 0.5);
 
-const deriveStatus = ({ flow_rate, pressure, timestamp, vibration = 0, humidity = 0, flow1, flow2, water_level, leak = 0, theft = 0 }) => {
+const deriveMoistureFlowFlags = ({ flow_rate, flow1, flow2, soil = 0, hasSoilReading = soil !== undefined && soil !== null && soil !== '', leak = 0, theft = 0 }) => {
+  const sensorFlow1 = Number(flow1 ?? flow_rate ?? 0);
+  const sensorFlow2 = Number(flow2 ?? 0);
+  const soilValue = Number(soil ?? 0);
+  const flowMismatch = Math.abs(sensorFlow1 - sensorFlow2);
+  const hasFlow = sensorFlow1 > FLOW_STOP_THRESHOLD || sensorFlow2 > FLOW_STOP_THRESHOLD || Number(flow_rate || 0) > FLOW_STOP_THRESHOLD;
+  const soilShowsLeakage = hasSoilReading && soilValue >= SOIL_LEAK_THRESHOLD;
+  const noMoistureDetected = hasSoilReading && soilValue <= SOIL_DRY_THRESHOLD;
+  const halfMeterDrop =
+    (sensorFlow1 > FLOW_STOP_THRESHOLD && sensorFlow2 <= Math.max(FLOW_STOP_THRESHOLD, sensorFlow1 * FLOW_HALF_THEFT_RATIO)) ||
+    (sensorFlow2 > FLOW_STOP_THRESHOLD && sensorFlow1 <= Math.max(FLOW_STOP_THRESHOLD, sensorFlow2 * FLOW_HALF_THEFT_RATIO));
+  const flowDropping = sensorFlow1 > FLOW_STOP_THRESHOLD && sensorFlow2 <= Math.max(FLOW_STOP_THRESHOLD, sensorFlow1 * 0.65);
+  const unnecessaryFlowBehavior = flowMismatch >= FLOW_MISMATCH_THEFT_THRESHOLD || (hasFlow && flowMismatch >= FLOW_MISMATCH_LEAK_THRESHOLD);
+  const theftDetected = Number(theft) === 1 || halfMeterDrop || (noMoistureDetected && (flowDropping || unnecessaryFlowBehavior));
+  const leakDetected = !theftDetected && (Number(leak) === 1 || soilShowsLeakage || (!noMoistureDetected && flowMismatch >= FLOW_MISMATCH_LEAK_THRESHOLD));
+
+  return {
+    leak: leakDetected ? 1 : 0,
+    theft: theftDetected ? 1 : 0,
+    flowMismatch,
+    halfMeterDrop,
+    flowDropping,
+    soilShowsLeakage,
+    noMoistureDetected,
+  };
+};
+
+const deriveStatus = ({ flow_rate, pressure, timestamp, vibration = 0, humidity = 0, soil = 0, hasSoilReading, flow1, flow2, water_level, leak = 0, theft = 0 }) => {
   const sensorFlow1 = Number(flow1 ?? flow_rate ?? 0);
   const sensorFlow2 = Number(flow2 ?? 0);
   const humidityValue = Number(humidity ?? 0);
+  const soilValue = Number(soil ?? 0);
   const vibrationValue = Number(vibration ?? 0);
-  const leakValue = Number(leak ?? 0);
-  const theftValue = Number(theft ?? 0);
+  const inferred = deriveMoistureFlowFlags({ flow_rate, flow1, flow2, soil, hasSoilReading, leak, theft });
   const waterLevelValue = Number(water_level);
   const pressureValue = Number(pressure);
   const hasPressure = Number.isFinite(pressureValue) && pressureValue > 0;
 
-  if (theftValue === 1) {
+  if (inferred.theft === 1) {
     return 'Water Theft';
   }
 
-  if (leakValue === 1) {
+  if (inferred.leak === 1) {
     return 'Water Leakage';
   }
 
@@ -56,6 +88,10 @@ const deriveStatus = ({ flow_rate, pressure, timestamp, vibration = 0, humidity 
 
   if (humidityValue > HUMIDITY_THRESHOLD) {
     return 'High Humidity';
+  }
+
+  if (hasSoilReading && soilValue > 0 && soilValue < SOIL_DRY_THRESHOLD) {
+    return 'Dry Soil';
   }
 
   if (Number.isFinite(waterLevelValue) && waterLevelValue > 0 && waterLevelValue <= LOW_WATER_LEVEL_THRESHOLD) {
@@ -111,12 +147,20 @@ const deriveAlertReasons = (reading) => {
     reasons.push(`Humidity exceeded ${HUMIDITY_THRESHOLD}%.`);
   }
 
+  if (Number(reading.soil || 0) >= SOIL_LEAK_THRESHOLD && Number(reading.theft || 0) !== 1) {
+    reasons.push(`Soil moisture is high (${Number(reading.soil).toFixed(0)}%), so leakage is suspected around the pipe.`);
+  }
+
+  if (Number(reading.soil || 0) < SOIL_DRY_THRESHOLD && Number(reading.soil || 0) > 0) {
+    reasons.push('Soil moisture is low, so flow loss is more likely theft than leakage.');
+  }
+
   if (Number(reading.leak || 0) === 1) {
-    reasons.push('Ultrasonic sensor detected a sudden water-level drop.');
+    reasons.push('Leakage detected from soil moisture, ultrasonic, or flow-meter comparison.');
   }
 
   if (Number(reading.theft || 0) === 1) {
-    reasons.push('Possible water theft detected from level drop or flow mismatch.');
+    reasons.push('Possible water theft detected: one flow meter is reading half or less than the other meter.');
   }
 
   if (Number(reading.water_level || 0) > 0 && Number(reading.water_level || 0) <= LOW_WATER_LEVEL_THRESHOLD) {
@@ -148,13 +192,20 @@ const normalizeReading = (input) => {
   const tdsValue = clamp(toSensorNumber(input.tds), 0, 5000);
   const vibration = toSensorNumber(input.vibration ?? input.VIBRATION) === 1 ? 1 : 0;
   const humidity = clamp(toSensorNumber(input.humidity ?? input.HUMIDITY), 0, 100);
+  const rawSoil = input.soil ?? input.SOIL;
+  const hasSoilReading = rawSoil !== undefined && rawSoil !== null && rawSoil !== '';
+  const soil = clamp(toSensorNumber(rawSoil), 0, 100);
   const distanceCm = clamp(toSensorNumber(input.distance_cm ?? input.distanceCm ?? input.distance ?? input.DISTANCE, 0), 0, 500);
   const waterLevel = clamp(toSensorNumber(input.water_level ?? input.waterLevel ?? input.level ?? input.LEVEL, 0), 0, 100);
-  const leak = toSensorNumber(input.leak ?? input.LEAK) === 1 ? 1 : 0;
-  const theft = toSensorNumber(input.theft ?? input.THEFT) === 1 ? 1 : 0;
+  const ultrasonic = toSensorNumber(input.ultrasonic ?? input.ULTRASONIC, distanceCm > 0 ? 1 : 0) === 1 ? 1 : 0;
+  const rawLeak = toSensorNumber(input.leak ?? input.LEAK) === 1 ? 1 : 0;
+  const rawTheft = toSensorNumber(input.theft ?? input.THEFT) === 1 ? 1 : 0;
+  const inferredFlags = deriveMoistureFlowFlags({ flow_rate: flowRate, flow1, flow2, soil, hasSoilReading, leak: rawLeak, theft: rawTheft });
+  const leak = inferredFlags.leak;
+  const theft = inferredFlags.theft;
   const buzzer = toSensorNumber(input.buzzer ?? input.BUZZER) === 1 ? 1 : 0;
   const ts = input.timestamp || new Date().toISOString();
-  const status = input.status || deriveStatus({ flow_rate: flowRate, pressure, timestamp: ts, vibration, humidity, flow1, flow2, water_level: waterLevel, leak, theft });
+  const status = input.status || deriveStatus({ flow_rate: flowRate, pressure, timestamp: ts, vibration, humidity, soil, hasSoilReading, flow1, flow2, water_level: waterLevel, leak, theft });
   const water_health = input.water_health || input.waterHealth || deriveWaterHealth(tdsValue);
 
   const reading = {
@@ -168,8 +219,10 @@ const normalizeReading = (input) => {
     tds: Number(tdsValue.toFixed(2)),
     vibration,
     humidity: Number(humidity.toFixed(2)),
+    soil: Number(soil.toFixed(2)),
     distance_cm: Number(distanceCm.toFixed(2)),
     water_level: Number(waterLevel.toFixed(2)),
+    ultrasonic,
     leak,
     theft,
     buzzer,
@@ -212,15 +265,17 @@ const parseArduinoLine = (line) => {
   }
 
   const sensorPairs = parseKeyValueLine(trimmed);
-  if (sensorPairs && (sensorPairs.FLOW !== undefined || sensorPairs.FLOW1 !== undefined || sensorPairs.FLOW2 !== undefined || sensorPairs.VIBRATION !== undefined || sensorPairs.HUMIDITY !== undefined || sensorPairs.DISTANCE !== undefined || sensorPairs.LEVEL !== undefined || sensorPairs.LEAK !== undefined || sensorPairs.THEFT !== undefined || sensorPairs.BUZZER !== undefined)) {
+  if (sensorPairs && (sensorPairs.FLOW !== undefined || sensorPairs.FLOW1 !== undefined || sensorPairs.FLOW2 !== undefined || sensorPairs.VIBRATION !== undefined || sensorPairs.HUMIDITY !== undefined || sensorPairs.SOIL !== undefined || sensorPairs.Y !== undefined || sensorPairs.DISTANCE !== undefined || sensorPairs.LEVEL !== undefined || sensorPairs.ULTRASONIC !== undefined || sensorPairs.LEAK !== undefined || sensorPairs.THEFT !== undefined || sensorPairs.BUZZER !== undefined)) {
     return normalizeReading({
       house_id: 'house_1',
       flow1: sensorPairs.FLOW1 ?? sensorPairs.FLOW,
       flow2: sensorPairs.FLOW2 ?? 0,
       vibration: sensorPairs.VIBRATION,
-      humidity: sensorPairs.HUMIDITY,
+      humidity: sensorPairs.HUMIDITY ?? sensorPairs.Y,
+      soil: sensorPairs.SOIL,
       distance: sensorPairs.DISTANCE,
       level: sensorPairs.LEVEL,
+      ultrasonic: sensorPairs.ULTRASONIC,
       leak: sensorPairs.LEAK,
       theft: sensorPairs.THEFT,
       buzzer: sensorPairs.BUZZER,

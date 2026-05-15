@@ -42,22 +42,29 @@ export default function ArduinoChart({ reading }: ArduinoChartProps) {
   const flow2 = reading?.flow2 ?? 0;
   const humidity = Number.isFinite(reading?.humidity) ? Number(reading?.humidity) : null;
   const humidityValue = humidity ?? 0;
-  const distanceCm = Number.isFinite(reading?.distance_cm) ? Number(reading?.distance_cm) : null;
-  const measuredWaterLevel = Number.isFinite(reading?.water_level) ? Number(reading?.water_level) : null;
+  const soil = Number.isFinite(reading?.soil) ? Number(reading?.soil) : null;
+  const soilValue = soil ?? 0;
+  const soilLeakSignal = soilValue >= 55;
+  const soilTheftSignal = soil !== null && soilValue <= 20 && (reading?.theft ?? 0) === 1;
+  const halfFlowTheftSignal =
+    (flow1 > 0.05 && flow2 <= Math.max(0.05, flow1 * 0.5)) ||
+    (flow2 > 0.05 && flow1 <= Math.max(0.05, flow2 * 0.5));
+  const vibration = reading?.vibration ?? 0;
   const leak = reading?.leak ?? 0;
   const theft = reading?.theft ?? 0;
   const buzzer = reading?.buzzer ?? 0;
-  const isAlert = humidityValue > 75 || leak === 1 || theft === 1 || buzzer === 1 || (!!reading && reading.status !== 'Normal');
+  const isAlert = vibration === 1 || humidityValue > 75 || soilLeakSignal || leak === 1 || theft === 1 || buzzer === 1 || (!!reading && reading.status !== 'Normal');
   const isConnected = !!reading && reading.status !== 'Offline';
-  const waterLevel = measuredWaterLevel ?? Math.min(92, Math.max(18, ((flow1 + flow2) / 20) * 100));
+  const waterLevel = Math.min(92, Math.max(18, ((flow1 + flow2) / 20) * 100));
 
   const sensors = [
     { label: 'Flow sensor 1', value: `${flow1.toFixed(2)} L/m`, icon: <Droplet size={14} />, alert: flow1 <= 0.05 },
     { label: 'Flow sensor 2', value: `${flow2.toFixed(2)} L/m`, icon: <Droplet size={14} />, alert: flow2 <= 0.05 },
     { label: 'Humidity', value: humidity === null ? 'Waiting' : `${humidity.toFixed(0)}%`, icon: <Gauge size={14} />, alert: humidityValue > 75 },
-    { label: 'Ultrasonic', value: distanceCm === null ? 'Waiting' : `${distanceCm.toFixed(1)} cm`, icon: <Ruler size={14} />, alert: waterLevel <= 20 },
-    { label: 'Leakage', value: leak === 1 ? 'Found' : 'Clear', icon: <Droplet size={14} />, alert: leak === 1 },
-    { label: 'Theft', value: theft === 1 ? 'Found' : 'Clear', icon: <ShieldAlert size={14} />, alert: theft === 1 },
+    { label: 'Soil Moisture', value: soil === null ? 'Waiting' : `${soil.toFixed(0)}%`, icon: <Droplet size={14} />, alert: soilLeakSignal },
+    { label: 'Vibration', value: vibration === 1 ? 'Detected' : 'Clear', icon: <Activity size={14} />, alert: vibration === 1 },
+    { label: 'Leakage', value: leak === 1 ? (soilLeakSignal ? 'Soil wet' : 'Found') : 'Clear', icon: <Droplet size={14} />, alert: leak === 1 },
+    { label: 'Theft', value: theft === 1 || halfFlowTheftSignal ? (halfFlowTheftSignal ? 'Meter half drop' : soilTheftSignal ? 'Dry soil + flow drop' : 'Found') : 'Clear', icon: <ShieldAlert size={14} />, alert: theft === 1 || halfFlowTheftSignal },
     { label: 'Buzzer', value: buzzer === 1 ? 'On' : 'Off', icon: <Bell size={14} />, alert: buzzer === 1 },
   ];
 
@@ -147,7 +154,7 @@ export default function ArduinoChart({ reading }: ArduinoChartProps) {
           </div>
 
           <div className="grid grid-cols-2 gap-3 text-xs text-slate-400">
-            <div>Serial: FLOW1,FLOW2,HUMIDITY,DISTANCE,LEVEL,LEAK,THEFT,BUZZER</div>
+            <div>Serial: FLOW1,FLOW2,HUMIDITY,SOIL,VIBRATION,LEAK,THEFT,BUZZER</div>
             <div className="text-right">
               Last: {reading?.timestamp ? new Date(reading.timestamp).toLocaleTimeString('en-IN') : 'Waiting'}
             </div>
