@@ -3,9 +3,23 @@ const DEFAULT_GRAPH_API_VERSION = 'v23.0';
 const normalizePhoneNumber = (value) => String(value || '').replace(/[^\d]/g, '');
 
 const getWhatsAppConfig = () => {
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.WA_PHONE_NUMBER_ID;
-  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.CLOUD_API_ACCESS_TOKEN;
-  const recipients = String(process.env.WHATSAPP_TO_PHONE_NUMBER || process.env.WHATSAPP_ALERT_RECIPIENTS || '')
+  const phoneNumberId =
+    process.env.WHATSAPP_PHONE_NUMBER_ID ||
+    process.env.WA_PHONE_NUMBER_ID ||
+    process.env.META_WHATSAPP_PHONE_NUMBER_ID ||
+    process.env.META_PHONE_NUMBER_ID;
+  const accessToken =
+    process.env.WHATSAPP_ACCESS_TOKEN ||
+    process.env.CLOUD_API_ACCESS_TOKEN ||
+    process.env.META_WHATSAPP_ACCESS_TOKEN ||
+    process.env.META_ACCESS_TOKEN;
+  const recipients = String(
+    process.env.WHATSAPP_TO_PHONE_NUMBER ||
+      process.env.WHATSAPP_ALERT_RECIPIENTS ||
+      process.env.META_WHATSAPP_TO_PHONE_NUMBER ||
+      process.env.META_ALERT_RECIPIENTS ||
+      '',
+  )
     .split(',')
     .map(normalizePhoneNumber)
     .filter(Boolean);
@@ -66,7 +80,7 @@ const sendWhatsAppText = async (body) => {
   const config = getWhatsAppConfig();
 
   if (typeof fetch !== 'function') {
-    console.warn('[WhatsApp] Global fetch is unavailable. Use Node 18+ to enable Cloud API messaging.');
+    console.warn('[WhatsApp] Global fetch is unavailable. Use Node 18+ to enable WhatsApp messaging.');
     return { ok: false, skipped: true, reason: 'fetch_unavailable' };
   }
 
@@ -103,17 +117,60 @@ const formatMetric = (value, suffix = '') => {
 
 const sendLeakAlert = async (reading = {}) => {
   const body = [
-    'FlowIntel Alert',
+    '🚨 *FlowIntel Alert* 🚨',
     '',
-    `Status: ${reading.status || 'Leak suspected'}`,
-    `Node: ${reading.house_id || reading.zone || 'Unknown'}`,
-    `Flow: ${formatMetric(reading.flow_rate, ' L/min')}`,
-    `Pressure: ${formatMetric(reading.pressure, ' kPa')}`,
-    reading.tds !== undefined ? `TDS: ${formatMetric(reading.tds, ' ppm')}` : null,
-    reading.humidity !== undefined ? `Humidity: ${formatMetric(reading.humidity, '%')}` : null,
-    `Time: ${new Date(reading.timestamp || Date.now()).toLocaleString('en-IN')}`,
+    `📊 *Status:* ${reading.status || 'Leak suspected'}`,
+    `📍 *Node:* ${reading.house_id || reading.zone || 'Unknown'}`,
+    `💧 *Flow:* ${formatMetric(reading.flow_rate, ' L/min')}`,
+    `🗜️ *Pressure:* ${formatMetric(reading.pressure, ' kPa')}`,
+    reading.tds !== undefined ? `🧪 *TDS:* ${formatMetric(reading.tds, ' ppm')}` : null,
+    reading.humidity !== undefined ? `☁️ *Humidity:* ${formatMetric(reading.humidity, '%')}` : null,
+    `🕒 *Time:* ${new Date(reading.timestamp || Date.now()).toLocaleString('en-IN')}`,
     '',
-    'Action: Inspect the line, valve, and flow sensor immediately.',
+    '⚠️ *Action:* Inspect the line, valve, and flow sensor immediately.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return sendWhatsAppText(body);
+};
+
+const sendTheftAlert = async (reading = {}, reason = 'One flow meter is reading half or less than the other meter.') => {
+  const body = [
+    '🚨 *THEFT DETECTED* 🚨',
+    '',
+    `📍 *Node:* ${reading.house_id || reading.zone || 'Unknown'}`,
+    `💧 *Flow meter 1:* ${formatMetric(reading.flow1, ' L/min')}`,
+    `💧 *Flow meter 2:* ${formatMetric(reading.flow2, ' L/min')}`,
+    `🌊 *Total flow:* ${formatMetric(reading.flow_rate, ' L/min')}`,
+    reading.pressure !== undefined ? `🗜️ *Pressure:* ${formatMetric(reading.pressure, ' kPa')}` : null,
+    reading.soil !== undefined ? `🌱 *Soil moisture:* ${formatMetric(reading.soil, '%')}` : null,
+    `🕒 *Time:* ${new Date(reading.timestamp || Date.now()).toLocaleString('en-IN')}`,
+    '',
+    `⚠️ *Warning:* ${reason}`,
+    '🛠️ *Action:* Inspect the line immediately for illegal tapping or bypass flow.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return sendWhatsAppText(body);
+};
+
+const sendSoilFlowDropAlert = async (reading = {}, reason = 'Soil moisture and flow readings indicate water loss.') => {
+  const body = [
+    '⚠️ *SOIL / FLOW DROP ALERT* ⚠️',
+    '',
+    `📍 *Node:* ${reading.house_id || reading.zone || 'Unknown'}`,
+    `📊 *Status:* ${reading.status || 'Sensor alert'}`,
+    `💧 *Flow meter 1:* ${formatMetric(reading.flow1, ' L/min')}`,
+    `💧 *Flow meter 2:* ${formatMetric(reading.flow2, ' L/min')}`,
+    `🌊 *Total flow:* ${formatMetric(reading.flow_rate, ' L/min')}`,
+    reading.soil !== undefined ? `🌱 *Soil moisture:* ${formatMetric(reading.soil, '%')}` : null,
+    reading.water_level !== undefined ? `🚰 *Water level:* ${formatMetric(reading.water_level, '%')}` : null,
+    `🕒 *Time:* ${new Date(reading.timestamp || Date.now()).toLocaleString('en-IN')}`,
+    '',
+    `⚠️ *Warning:* ${reason}`,
+    '🛠️ *Action:* Check the pipe route, soil around the line, and both flow meters.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -132,16 +189,16 @@ const sendWaterReport = async ({ stats = [], alerts = [], generatedAt = new Date
     .join('\n');
 
   const body = [
-    'FlowIntel Water Report',
+    '📈 *FlowIntel Water Report* 📈',
     '',
-    `Generated: ${new Date(generatedAt).toLocaleString('en-IN')}`,
-    `Total flow: ${formatMetric(totalFlow, ' L')}`,
-    `Fault count: ${totalFaults}`,
-    `Recent alerts: ${alerts.length}`,
+    `🕒 *Generated:* ${new Date(generatedAt).toLocaleString('en-IN')}`,
+    `🌊 *Total flow:* ${formatMetric(totalFlow, ' L')}`,
+    `❌ *Fault count:* ${totalFaults}`,
+    `🔔 *Recent alerts:* ${alerts.length}`,
     '',
-    topStations ? `Top stations:\n${topStations}` : 'Top stations: No station history yet.',
+    topStations ? `🏆 *Top stations:*\n${topStations}` : '🏆 *Top stations:* No station history yet.',
     '',
-    alerts[0] ? `Latest alert: ${alerts[0].type} - ${alerts[0].message}` : 'Latest alert: None',
+    alerts[0] ? `🚨 *Latest alert:* ${alerts[0].type} - ${alerts[0].message}` : '✅ *Latest alert:* None',
   ].join('\n');
 
   return sendWhatsAppText(body);
@@ -149,6 +206,8 @@ const sendWaterReport = async ({ stats = [], alerts = [], generatedAt = new Date
 
 module.exports = {
   sendLeakAlert,
+  sendSoilFlowDropAlert,
+  sendTheftAlert,
   sendWaterReport,
   sendWhatsAppText,
 };

@@ -8,6 +8,7 @@ const { setupHardware } = require('./hardware');
 const { getNetworkSnapshot, houses, zones } = require('./network');
 const multer = require('multer');
 const { isHFReady, ingestDocument, searchSimilar } = require('./rag');
+const { sendLeakAlert, sendSoilFlowDropAlert, sendTheftAlert } = require('./whatsapp');
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -30,8 +31,10 @@ const safeParseJson = (raw) => {
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const getGroqModel = () => process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 const GROQ_SENSOR_ANALYSIS_INTERVAL_MS = Number(process.env.GROQ_SENSOR_ANALYSIS_INTERVAL_MS || 12000);
+const WHATSAPP_ALERT_COOLDOWN_MS = Number(process.env.WHATSAPP_ALERT_COOLDOWN_MS || 60000);
 const lastGroqSensorAnalysisAt = new Map();
 const latestGroqReadingByHouse = new Map();
+const lastWhatsAppAlertAt = new Map();
 let groqReady = false;
 try {
   require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -63,6 +66,77 @@ const normalizeAiBoolean = (value) => {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value === 1;
   return ['true', 'yes', 'detected', 'found', '1'].includes(String(value || '').trim().toLowerCase());
+};
+
+const getFlowDropSignals = (reading = {}) => {
+  const flow1 = Number(reading.flow1 ?? reading.flow_rate ?? 0);
+  const flow2 = Number(reading.flow2 ?? 0);
+  const soil = Number(reading.soil ?? 0);
+  const halfMeterDrop =
+    (flow1 > 0.05 && flow2 <= Math.max(0.05, flow1 * 0.5)) ||
+    (flow2 > 0.05 && flow1 <= Math.max(0.05, flow2 * 0.5));
+  const flowDrop = flow1 > 0.05 && flow2 <= Math.max(0.05, flow1 * 0.65);
+  const soilMoistureAlert = soil >= 55 && flowDrop;
+
+  return { flow1, flow2, soil, halfMeterDrop, flowDrop, soilMoistureAlert };
+};
+
+const sendWhatsAppAlertOnce = async ({ key, sender, reading, reason }) => {
+  const now = Date.now();
+  const lastSentAt = lastWhatsAppAlertAt.get(key) || 0;
+  if (now - lastSentAt < WHATSAPP_ALERT_COOLDOWN_MS) {
+    return;
+  }
+
+  lastWhatsAppAlertAt.set(key, now);
+
+  try {
+    const result = await sender(reading, reason);
+    if (!result?.ok) {
+      console.warn(`[WhatsApp] Alert skipped or failed for ${key}:`, result?.reason || 'not sent');
+    }
+  } catch (error) {
+    console.error(`[WhatsApp] Alert failed for ${key}:`, error.message);
+  }
+};
+
+const maybeSendWhatsAppSensorAlerts = (reading = {}) => {
+  const { flow1, flow2, soil, halfMeterDrop, flowDrop, soilMoistureAlert } = getFlowDropSignals(reading);
+  const houseId = reading.house_id || 'unknown';
+
+  if (reading.theft === 1 || halfMeterDrop || reading.status === 'Water Theft') {
+    sendWhatsAppAlertOnce({
+      key: `${houseId}:theft`,
+      sender: sendTheftAlert,
+      reading,
+      reason: `Flow meter mismatch detected. Meter readings are ${flow1.toFixed(2)} L/min and ${flow2.toFixed(2)} L/min; one meter is half or less than the other.`,
+    });
+  }
+
+  if (reading.leak === 1 || reading.status === 'Water Leakage') {
+    sendWhatsAppAlertOnce({
+      key: `${houseId}:leak`,
+      sender: sendLeakAlert,
+      reading,
+      reason: 'Leakage detected from flow, soil moisture, or AI analysis.',
+    });
+  }
+
+  if (soilMoistureAlert) {
+    sendWhatsAppAlertOnce({
+      key: `${houseId}:soil-flow-drop`,
+      sender: sendSoilFlowDropAlert,
+      reading,
+      reason: `Soil moisture is ${soil.toFixed(0)}% while output flow dropped below expected flow.`,
+    });
+  } else if (flowDrop && soil > 0) {
+    sendWhatsAppAlertOnce({
+      key: `${houseId}:flow-drop`,
+      sender: sendSoilFlowDropAlert,
+      reading,
+      reason: `Output flow dropped compared with input flow. Soil moisture is ${soil.toFixed(0)}%.`,
+    });
+  }
 };
 
 const analyzeSensorReadingWithGroq = async (reading) => {
@@ -194,6 +268,7 @@ const maybeRunGroqSensorAnalysis = async (reading) => {
 
     latestGroqReadingByHouse.set(reading.house_id, analyzedReading);
     io.emit('sensorUpdate', analyzedReading);
+    maybeSendWhatsAppSensorAlerts(analyzedReading);
     emitDashboardAlert({
       house_id: reading.house_id,
       type,
@@ -251,6 +326,7 @@ const handleSensorData = (reading) => {
     latestGroqReadingByHouse.delete(reading.house_id);
   }
   io.emit('sensorUpdate', reading);
+  maybeSendWhatsAppSensorAlerts(reading);
   maybeRunGroqSensorAnalysis(reading);
 };
 
