@@ -99,6 +99,7 @@ const initDb = (done = () => {}) => {
     addColumnIfMissing('flow_data', 'flow2', 'REAL DEFAULT 0');
     addColumnIfMissing('flow_data', 'vibration', 'INTEGER DEFAULT 0');
     addColumnIfMissing('flow_data', 'humidity', 'REAL DEFAULT 0');
+    addColumnIfMissing('flow_data', 'soil', 'REAL DEFAULT 0');
     addColumnIfMissing('flow_data', 'distance_cm', 'REAL DEFAULT 0');
     addColumnIfMissing('flow_data', 'water_level', 'REAL DEFAULT 0');
     addColumnIfMissing('flow_data', 'ultrasonic', 'INTEGER DEFAULT 0');
@@ -111,6 +112,7 @@ const initDb = (done = () => {}) => {
     addColumnIfMissing('current_status', 'flow2', 'REAL DEFAULT 0');
     addColumnIfMissing('current_status', 'vibration', 'INTEGER DEFAULT 0');
     addColumnIfMissing('current_status', 'humidity', 'REAL DEFAULT 0');
+    addColumnIfMissing('current_status', 'soil', 'REAL DEFAULT 0');
     addColumnIfMissing('current_status', 'distance_cm', 'REAL DEFAULT 0');
     addColumnIfMissing('current_status', 'water_level', 'REAL DEFAULT 0');
     addColumnIfMissing('current_status', 'ultrasonic', 'INTEGER DEFAULT 0');
@@ -137,6 +139,7 @@ const storeReading = (reading) => {
     tds = 0,
     vibration = 0,
     humidity = 0,
+    soil = 0,
     distance_cm = 0,
     water_level = 0,
     ultrasonic = 0,
@@ -155,15 +158,15 @@ const storeReading = (reading) => {
     db.run('BEGIN TRANSACTION');
     
     db.run(
-      `INSERT INTO flow_data (house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, timestamp],
+      `INSERT INTO flow_data (house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, soil, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, soil, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, timestamp],
     );
 
     db.run(
-      `INSERT OR REPLACE INTO current_status (house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, last_updated)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, timestamp],
+      `INSERT OR REPLACE INTO current_status (house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, soil, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, last_updated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, soil, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, timestamp],
     );
 
     if (Array.isArray(reading.alert_reasons) && reading.alert_reasons.length > 0) {
@@ -196,7 +199,7 @@ const storeReading = (reading) => {
 
 const getLatestReadings = (cb) => {
   db.all(
-    `SELECT house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, last_updated AS timestamp FROM current_status`,
+    `SELECT house_id, flow1, flow2, flow_rate, pressure, tds, vibration, humidity, soil, distance_cm, water_level, ultrasonic, leak, theft, buzzer, water_health, status, last_updated AS timestamp FROM current_status`,
     [],
     (err, rows) => {
       if (err) {
@@ -213,7 +216,7 @@ const getReadingHistory = ({ houseId, limit = 24 }, cb) => {
   db.all(
     `
       SELECT house_id, flow_rate, pressure, status, timestamp
-      , flow1, flow2, vibration, humidity, distance_cm, water_level, ultrasonic, leak, theft, buzzer, tds, water_health
+      , flow1, flow2, vibration, humidity, soil, distance_cm, water_level, ultrasonic, leak, theft, buzzer, tds, water_health
       FROM flow_data
       WHERE house_id = ?
       ORDER BY datetime(timestamp) DESC
@@ -251,6 +254,36 @@ const getRecentAlerts = ({ limit = 30 } = {}, cb) => {
   );
 };
 
+const storeSensorAlert = (alert, cb = () => {}) => {
+  const timestamp = alert.timestamp || new Date().toISOString();
+  db.run(
+    `INSERT INTO sensor_alerts (house_id, type, message, severity, timestamp) VALUES (?, ?, ?, ?, ?)`,
+    [
+      alert.house_id,
+      alert.type || 'Sensor Alert',
+      alert.message || 'Sensor anomaly detected.',
+      alert.severity || 'critical',
+      timestamp,
+    ],
+    function onInsert(err) {
+      if (err) {
+        console.error('[Database] Failed to store sensor alert:', err.message);
+        cb(err);
+        return;
+      }
+
+      cb(null, {
+        id: this.lastID,
+        house_id: alert.house_id,
+        type: alert.type || 'Sensor Alert',
+        message: alert.message || 'Sensor anomaly detected.',
+        severity: alert.severity || 'critical',
+        timestamp,
+      });
+    },
+  );
+};
+
 const getHouseStats = (cb) => {
   db.all(`SELECT house_id, cumulative_flow_liters, fault_count FROM house_stats`, [], (err, rows) => {
     if (err) {
@@ -262,4 +295,4 @@ const getHouseStats = (cb) => {
   });
 };
 
-module.exports = { initDb, storeReading, getLatestReadings, getReadingHistory, getHouseStats, getRecentAlerts };
+module.exports = { initDb, storeReading, getLatestReadings, getReadingHistory, getHouseStats, getRecentAlerts, storeSensorAlert };

@@ -11,6 +11,7 @@ export type SensorStatus =
   | 'Low Water Level'
   | 'Water Leakage'
   | 'Water Theft'
+  | 'Dry Soil'
   | 'Flow Stopped';
 
 export type WaterHealth = 'Good' | 'Bad' | 'Unknown';
@@ -26,6 +27,7 @@ export interface SensorReading {
   tds?: number;
   vibration?: number;
   humidity?: number;
+  soil?: number;
   distance_cm?: number;
   water_level?: number;
   ultrasonic?: number;
@@ -37,6 +39,15 @@ export interface SensorReading {
   timestamp: string;
   is_mock?: boolean;
   alert_reasons?: string[];
+  groq_analysis?: {
+    leakDetected?: boolean;
+    theftDetected?: boolean;
+    status?: string;
+    severity?: 'critical' | 'warning' | 'info';
+    confidence?: number;
+    reason?: string;
+    recommendedAction?: string;
+  };
 }
 
 export interface SensorAlert {

@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -18,6 +18,8 @@ import sampleAIData from '../utils/sampleAIData';
 const buildLastReadings = (readings) =>
   readings.map((reading) => ({
     houseId: reading.house_id,
+    flow1: reading.flow1,
+    flow2: reading.flow2,
     flowRate: reading.flow_rate,
     pressure: reading.pressure,
     status: reading.status,
@@ -253,16 +255,16 @@ export default function AIAnalysis() {
     }
     return undefined;
   }, [liveFlow, baseline, history, riskLevel, network, primaryReading]);
-
   const handleRun = async () => {
     setError('');
-
     setIsRunning(true);
     try {
       const apiUrl = '/api';
       const payload = hasData
         ? {
             currentFlow: primaryReading?.flow_rate ?? null,
+            currentFlow1: primaryReading?.flow1 ?? null,
+            currentFlow2: primaryReading?.flow2 ?? null,
             lastReadings: buildLastReadings(currentReadings),
             baseline,
             zone: network?.zones?.[0]?.name || 'Unknown',
@@ -277,7 +279,6 @@ export default function AIAnalysis() {
               })),
           }
         : sampleAIData;
-
       const response = await fetch(`${apiUrl}/ai-analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

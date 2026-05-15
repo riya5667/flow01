@@ -44,11 +44,24 @@ export default function ObservatoryDashboard() {
   const flow2 = physicalNode?.flow2 ?? 0;
   const humidity = Number.isFinite(physicalNode?.humidity) ? Number(physicalNode?.humidity) : null;
   const humidityValue = humidity ?? 0;
+  const soil = Number.isFinite(physicalNode?.soil) ? Number(physicalNode?.soil) : null;
+  const soilValue = soil ?? 0;
   const measuredWaterLevel = Number.isFinite(physicalNode?.water_level) ? Number(physicalNode?.water_level) : null;
   const leak = physicalNode?.leak ?? 0;
   const theft = physicalNode?.theft ?? 0;
   const buzzer = physicalNode?.buzzer ?? 0;
-  const hardwareAlert = !!physicalNode && (humidityValue > 75 || leak === 1 || theft === 1 || buzzer === 1 || physicalNode.status !== 'Normal');
+  const groqAnalysis = physicalNode?.groq_analysis;
+  const groqLeakSignal = groqAnalysis?.leakDetected || groqAnalysis?.status === 'Water Leakage';
+  const groqTheftSignal = groqAnalysis?.theftDetected || groqAnalysis?.status === 'Water Theft';
+  const soilLeakSignal = soilValue >= 55;
+  const soilTheftSignal = soil !== null && soilValue <= 20 && (theft === 1 || groqTheftSignal);
+  const halfFlowTheftSignal =
+    (flow1 > 0.05 && flow2 <= Math.max(0.05, flow1 * 0.5)) ||
+    (flow2 > 0.05 && flow1 <= Math.max(0.05, flow2 * 0.5));
+  const leakDetected = leak === 1 || groqLeakSignal;
+  const theftDetected = theft === 1 || groqTheftSignal || halfFlowTheftSignal;
+  const hardwareAlert = !!physicalNode && (humidityValue > 75 || leakDetected || theftDetected || buzzer === 1 || physicalNode.status !== 'Normal');
+  const latestDashboardAlerts = alerts.slice(0, 3);
 
   const totals = useMemo(() => {
     return currentReadings.reduce(
@@ -231,6 +244,32 @@ export default function ObservatoryDashboard() {
             </div>
           )}
 
+          {latestDashboardAlerts.length > 0 && (
+            <section className="mt-4 rounded-[18px] border border-[#ffd2c4] bg-[#fff2ed] px-5 py-4 shadow-[0_14px_34px_rgba(183,55,23,0.08)]">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#b73717]">Dashboard Alerts</p>
+                  <h2 className="mt-1 text-lg font-semibold tracking-[-0.03em] text-[#40160c]">
+                    {latestDashboardAlerts[0].type}
+                  </h2>
+                  <p className="mt-1 max-w-4xl text-sm font-medium text-[#7c3826]">{latestDashboardAlerts[0].message}</p>
+                </div>
+                <span className="rounded-full bg-white px-4 py-2 text-xs font-bold text-[#b73717]">
+                  {latestDashboardAlerts.length} active
+                </span>
+              </div>
+              {latestDashboardAlerts.length > 1 && (
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  {latestDashboardAlerts.slice(1).map((alert) => (
+                    <div key={alert.id || `${alert.type}-${alert.timestamp}`} className="rounded-xl bg-white/70 px-4 py-3 text-sm font-semibold text-[#6f2b19]">
+                      {alert.type}: <span className="font-medium">{alert.message}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           {activeTab === 'live' && (
             <div className="mt-7 flex flex-1 flex-col gap-5">
               <section className="grid gap-5 xl:grid-cols-[1fr_1fr_1.15fr]">
@@ -359,8 +398,9 @@ export default function ObservatoryDashboard() {
                       ['Flow 1', `${flow1.toFixed(2)} L/m`],
                       ['Flow 2', `${flow2.toFixed(2)} L/m`],
                       ['Humidity', humidity === null ? 'Waiting' : `${humidity.toFixed(0)}%`],
-                      ['Leakage', leak === 1 ? 'Found' : 'Clear'],
-                      ['Theft', theft === 1 ? 'Found' : 'Clear'],
+                      ['Soil Moisture', soil === null ? 'Waiting' : `${soil.toFixed(0)}%`],
+                      ['Leakage', leakDetected ? (groqLeakSignal ? 'Found by Groq' : soilLeakSignal ? 'Found by soil' : 'Found') : 'Clear'],
+                      ['Theft', theftDetected ? (halfFlowTheftSignal ? 'Flow meter half drop' : groqTheftSignal ? 'Found by Groq' : soilTheftSignal ? 'Flow loss, dry soil' : 'Found') : 'Clear'],
                     ].map(([label, value]) => (
                       <div key={label} className="rounded-2xl bg-[#f7f7f5] p-4">
                         <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#999991]">{label}</p>
@@ -470,6 +510,7 @@ export default function ObservatoryDashboard() {
           flow1: flow1.toFixed(2),
           flow2: flow2.toFixed(2),
           humidity: humidity !== null ? humidity.toFixed(1) : 'N/A',
+          soilMoisture: soil !== null ? soil.toFixed(1) : 'N/A',
           leak: leak === 1 ? 'DETECTED' : 'Clear',
           theft: theft === 1 ? 'DETECTED' : 'Clear',
           tds: physicalTds,

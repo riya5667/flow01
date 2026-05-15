@@ -3,7 +3,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const { initDb, storeReading, getLatestReadings, getReadingHistory, getHouseStats } = require('./db');
+const { initDb, storeReading, getLatestReadings, getReadingHistory, getHouseStats, getRecentAlerts, storeSensorAlert } = require('./db');
 const { setupHardware } = require('./hardware');
 const { getNetworkSnapshot, houses, zones } = require('./network');
 const multer = require('multer');
@@ -29,6 +29,9 @@ const safeParseJson = (raw) => {
 };
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const getGroqModel = () => process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+const GROQ_SENSOR_ANALYSIS_INTERVAL_MS = Number(process.env.GROQ_SENSOR_ANALYSIS_INTERVAL_MS || 12000);
+const lastGroqSensorAnalysisAt = new Map();
+const latestGroqReadingByHouse = new Map();
 let groqReady = false;
 try {
   require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -56,6 +59,159 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+const normalizeAiBoolean = (value) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  return ['true', 'yes', 'detected', 'found', '1'].includes(String(value || '').trim().toLowerCase());
+};
+
+const analyzeSensorReadingWithGroq = async (reading) => {
+  if (!groqReady || typeof fetch !== 'function') {
+    return null;
+  }
+
+  const prompt = `You are FlowIntel's live water-pipeline anomaly classifier.
+Analyze ALL sensor values together and decide whether this reading indicates water leakage or water theft.
+
+Rules:
+- High soil moisture near the pipe strongly supports leakage.
+- If soil moisture is low/no leakage moisture, but flow meters are mismatched, output flow drops, or flow behaves unnecessarily, strongly support theft.
+- Flow 1 is input flow. Flow 2 is output flow.
+- Vibration, humidity, tank level, ultrasonic distance, buzzer, TDS, and status can support the verdict but must not replace flow and soil evidence.
+- Return only JSON. Keep the message short for a dashboard alert.
+
+Sensor reading:
+${JSON.stringify({
+  house_id: reading.house_id,
+  flow1: reading.flow1,
+  flow2: reading.flow2,
+  flow_rate: reading.flow_rate,
+  pressure: reading.pressure,
+  humidity: reading.humidity,
+  soil: reading.soil,
+  vibration: reading.vibration,
+  distance_cm: reading.distance_cm,
+  water_level: reading.water_level,
+  ultrasonic: reading.ultrasonic,
+  leak: reading.leak,
+  theft: reading.theft,
+  buzzer: reading.buzzer,
+  tds: reading.tds,
+  water_health: reading.water_health,
+  status: reading.status,
+  timestamp: reading.timestamp,
+})}
+
+Return shape:
+{
+  "leakDetected": boolean,
+  "theftDetected": boolean,
+  "status": "Normal" | "Water Leakage" | "Water Theft" | "Leak Risk" | "Abnormal Flow",
+  "severity": "critical" | "warning" | "info",
+  "confidence": number,
+  "reason": "short reason with the strongest sensor evidence",
+  "recommendedAction": "short operator action"
+}`;
+
+  const completion = await fetch(GROQ_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: getGroqModel(),
+      messages: [{ role: 'system', content: prompt }],
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  const rawText = await completion.text();
+  if (!completion.ok) {
+    const parsedError = safeParseJson(rawText);
+    throw new Error(parsedError?.error?.message || rawText || 'Groq request failed.');
+  }
+
+  const envelope = safeParseJson(rawText);
+  const content = envelope?.choices?.[0]?.message?.content || rawText;
+  const parsed = safeParseJson(content);
+  if (!parsed) {
+    throw new Error('Groq returned an unreadable sensor analysis.');
+  }
+
+  return {
+    leakDetected: normalizeAiBoolean(parsed.leakDetected),
+    theftDetected: normalizeAiBoolean(parsed.theftDetected),
+    status: parsed.status || '',
+    severity: ['critical', 'warning', 'info'].includes(parsed.severity) ? parsed.severity : 'warning',
+    confidence: Number(parsed.confidence || 0),
+    reason: parsed.reason || 'Groq detected an abnormal sensor pattern.',
+    recommendedAction: parsed.recommendedAction || 'Inspect the affected line and compare flow meters.',
+  };
+};
+
+const emitDashboardAlert = (alert) => {
+  storeSensorAlert(alert, (err, savedAlert) => {
+    if (!err && savedAlert) {
+      io.emit('alertUpdate', savedAlert);
+    }
+  });
+};
+
+const maybeRunGroqSensorAnalysis = async (reading) => {
+  if (!groqReady) {
+    return;
+  }
+
+  const now = Date.now();
+  const lastRun = lastGroqSensorAnalysisAt.get(reading.house_id) || 0;
+  const isSuspicious = reading.leak === 1 || reading.theft === 1 || reading.status !== 'Normal';
+
+  if (!isSuspicious && now - lastRun < GROQ_SENSOR_ANALYSIS_INTERVAL_MS) {
+    return;
+  }
+
+  lastGroqSensorAnalysisAt.set(reading.house_id, now);
+
+  try {
+    const analysis = await analyzeSensorReadingWithGroq(reading);
+    if (!analysis) return;
+
+    const leakDetected = analysis.leakDetected || reading.leak === 1;
+    const theftDetected = analysis.theftDetected || reading.theft === 1;
+    if (!leakDetected && !theftDetected) {
+      return;
+    }
+
+    const type = theftDetected ? 'Water Theft' : 'Water Leakage';
+    const analyzedReading = {
+      ...reading,
+      leak: leakDetected ? 1 : 0,
+      theft: theftDetected ? 1 : 0,
+      status: type,
+      groq_analysis: analysis,
+    };
+
+    latestGroqReadingByHouse.set(reading.house_id, analyzedReading);
+    io.emit('sensorUpdate', analyzedReading);
+    emitDashboardAlert({
+      house_id: reading.house_id,
+      type,
+      severity: analysis.severity,
+      message: `Groq ${type}: ${analysis.reason} Action: ${analysis.recommendedAction}`,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('[Groq Sensor Analysis] Failed:', error.message);
+  }
+};
+
+const mergeGroqReadingOverrides = (readings = []) =>
+  readings.map((reading) => {
+    const override = latestGroqReadingByHouse.get(reading.house_id);
+    return override ? { ...reading, ...override } : reading;
+  });
+
 let dbReady = false;
 initDb((err) => {
   if (err) {
@@ -72,7 +228,11 @@ io.on('connection', (socket) => {
   console.log('A client connected:', socket.id);
 
   getLatestReadings((readings) => {
-    socket.emit('initialReadings', readings);
+    socket.emit('initialReadings', mergeGroqReadingOverrides(readings));
+  });
+
+  getRecentAlerts({ limit: 30 }, (alerts) => {
+    socket.emit('initialAlerts', alerts);
   });
 
   socket.on('disconnect', () => {
@@ -87,7 +247,11 @@ const handleSensorData = (reading) => {
     return;
   }
   storeReading(reading);
+  if (reading.status === 'Normal' && reading.leak !== 1 && reading.theft !== 1) {
+    latestGroqReadingByHouse.delete(reading.house_id);
+  }
   io.emit('sensorUpdate', reading);
+  maybeRunGroqSensorAnalysis(reading);
 };
 
 app.get('/api/status', (req, res) => {
@@ -119,7 +283,7 @@ app.get('/api/zones', (req, res) => {
 
 app.get('/api/readings/latest', (req, res) => {
   getLatestReadings((readings) => {
-    res.json(readings);
+    res.json(mergeGroqReadingOverrides(readings));
   });
 });
 
@@ -207,6 +371,8 @@ app.post('/api/ai-analysis', async (req, res) => {
 
   const {
     currentFlow,
+    currentFlow1,
+    currentFlow2,
     lastReadings,
     baseline,
     zone,
@@ -223,11 +389,15 @@ app.post('/api/ai-analysis', async (req, res) => {
   }
 
   try {
-    const prompt = `Analyze water flow sensor data.
+    const prompt = `Analyze water flow sensor data. 
+Crucially: There are two flow meters. "Current Flow 1" is the input, and "Current Flow 2" is the output. 
+If Flow 1 is significantly higher than Flow 2, it indicates a leak or water theft between the meters. A small discrepancy indicates a leak, while a large discrepancy indicates theft. Mention this in your analysis if true.
 
 Input:
 
-* Current flow: ${currentFlow}
+* Current Flow 1 (Input): ${currentFlow1} L/m
+* Current Flow 2 (Output): ${currentFlow2} L/m
+* Total Current Flow: ${currentFlow} L/m
 * Last readings: ${JSON.stringify(lastReadings)}
 * Baseline: ${baseline}
 * Zone: ${zone}
