@@ -1,30 +1,40 @@
 require('dotenv').config();
-const { sendWhatsAppText } = require('./whatsapp');
+const { sendWhatsAppText, sendLeakAlert } = require('./whatsapp');
 
-async function sendManualAlert() {
-    console.log('--- FlowIntel WhatsApp Alert System ---');
+async function runTests() {
+    const mode = process.argv[2] || 'test';
     
-    // Get message from command line arguments or use default
-    const customMessage = process.argv.slice(2).join(' ');
-    const message = customMessage || '🚀 FlowIntel Alert: This is a test notification from your WhatsApp Alert System!';
-
-    console.log(`Sending message: "${message}"...`);
+    console.log('--- FlowIntel WhatsApp Alert System Test Suite ---');
+    console.log(`Mode: ${mode.toUpperCase()}`);
 
     try {
-        const result = await sendWhatsAppText(message);
-        
-        if (result.ok) {
-            console.log('✅ Success! Message sent to ' + result.sent + ' recipient(s).');
-        } else {
-            console.error('❌ Failed to send alert.');
-            if (result.reason === 'missing_meta_config') {
-                console.error('Hint: Please fill in your credentials in the server/.env file.');
-            }
+        if (mode === 'leak') {
+            console.log('Simulating a Leak Alert...');
+            const dummyReading = {
+                house_id: 'House_01',
+                flow_rate: 12.5,
+                pressure: 180,
+                status: 'Leak Suspected',
+                timestamp: new Date().toISOString()
+            };
+            const result = await sendLeakAlert(dummyReading);
+            console.log(result.ok ? '✅ Leak alert sent!' : '❌ Failed to send leak alert.');
+        } 
+        else if (mode === 'theft') {
+            console.log('Simulating a Theft Alert...');
+            const message = `🚨 *THEFT DETECTED*\nLocation: Sector 4 - Main Line\nTime: ${new Date().toLocaleTimeString()}\n\nWarning: Unusual drop in pressure combined with high flow detected outside scheduled hours. Inspect for illegal tapping!`;
+            const result = await sendWhatsAppText(message);
+            console.log(result.ok ? '✅ Theft alert sent!' : '❌ Failed to send theft alert.');
+        }
+        else {
+            console.log('Sending a standard test message...');
+            const message = '🚀 FlowIntel Alert System is ONLINE. You will receive notifications here for any Leaks or Theft detected in the network.';
+            const result = await sendWhatsAppText(message);
+            console.log(result.ok ? '✅ Test message sent!' : '❌ Failed to send message.');
         }
     } catch (error) {
-        console.error('❌ Error occurred while sending WhatsApp alert:');
-        console.error(error.message);
+        console.error('❌ Error:', error.message);
     }
 }
 
-sendManualAlert();
+runTests();

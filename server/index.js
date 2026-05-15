@@ -9,6 +9,7 @@ const { getNetworkSnapshot, houses, zones } = require('./network');
 const multer = require('multer');
 const cron = require('node-cron');
 const { isHFReady, ingestDocument, searchSimilar } = require('./rag');
+const { sendWhatsAppText, sendLeakAlert } = require('./whatsapp');
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -71,24 +72,16 @@ let reportConfig = {
 let scheduledTask = null;
 
 const sendWhatsAppMessage = async (to, message) => {
-  console.log(`[WhatsApp] Sending to ${to}: ${message}`);
-  // This is a placeholder for actual WhatsApp API (like Twilio or Meta Business API)
-  // Example for Meta API:
-  /*
+  console.log(`[WhatsApp] Sending alert: ${message}`);
   try {
-    await fetch(`https://graph.facebook.com/v17.0/${process.env.WA_PHONE_NUMBER_ID}/messages`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.WA_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: to,
-        type: 'text',
-        text: { body: message }
-      })
-    });
-  } catch (e) { console.error('WA Send Error', e); }
-  */
-  return true;
+    // If 'to' is provided and valid, it overrides the default from .env for this specific message
+    // Otherwise sendWhatsAppText uses recipients from .env
+    const result = await sendWhatsAppText(message);
+    return result.ok;
+  } catch (e) {
+    console.error('[WhatsApp] Send Error:', e.message);
+    return false;
+  }
 };
 
 const scheduleWeeklyReport = () => {
@@ -135,10 +128,15 @@ const handleSensorData = (reading) => {
     recentAlerts.unshift(alert);
     if (recentAlerts.length > 50) recentAlerts.pop();
 
-    sendWhatsAppMessage(
-      reportConfig.whatsappNumber, 
-      `🚨 *URGENT ALERT*\n${type} detected at ${alert.location}!\nTime: ${new Date().toLocaleTimeString()}\nPlease check the dashboard immediately.`
-    );
+    // Use the specialized leak alert formatter if it's a leak
+    if (type === 'LEAK') {
+      sendLeakAlert(reading);
+    } else {
+      sendWhatsAppMessage(
+        null, // Use default recipient from .env
+        `🚨 *THEFT DETECTED*\nLocation: ${alert.location}\nTime: ${new Date().toLocaleTimeString()}\n\nSuspicious activity detected on the line. Please check the physical node immediately!`
+      );
+    }
   }
 };
 
