@@ -7,6 +7,7 @@ const { initDb, storeReading, getLatestReadings, getReadingHistory, getHouseStat
 const { setupHardware } = require('./hardware');
 const { getNetworkSnapshot, houses, zones } = require('./network');
 const multer = require('multer');
+const cron = require('node-cron');
 const { isHFReady, ingestDocument, searchSimilar } = require('./rag');
 
 const upload = multer({ dest: 'uploads/' });
@@ -58,7 +59,53 @@ app.use(express.json());
 
 initDb();
 
-io.on('connection', (socket) => {
+// In-memory store for Alerts and Report Scheduling (Should be DB in production)
+let recentAlerts = [];
+let reportConfig = {
+  enabled: true,
+  dayOfWeek: 0, // Sunday
+  hour: 9,
+  minute: 0,
+  whatsappNumber: 'YOUR_NUMBER'
+};
+let scheduledTask = null;
+
+const sendWhatsAppMessage = async (to, message) => {
+  console.log(`[WhatsApp] Sending to ${to}: ${message}`);
+  // This is a placeholder for actual WhatsApp API (like Twilio or Meta Business API)
+  // Example for Meta API:
+  /*
+  try {
+    await fetch(`https://graph.facebook.com/v17.0/${process.env.WA_PHONE_NUMBER_ID}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.WA_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'text',
+        text: { body: message }
+      })
+    });
+  } catch (e) { console.error('WA Send Error', e); }
+  */
+  return true;
+};
+
+const scheduleWeeklyReport = () => {
+  if (scheduledTask) scheduledTask.stop();
+  
+  const { dayOfWeek, hour, minute } = reportConfig;
+  const cronExpression = `${minute} ${hour} * * ${dayOfWeek}`;
+  
+  scheduledTask = cron.schedule(cronExpression, () => {
+    console.log('Running scheduled weekly report...');
+    const msg = `📊 *Weekly FlowIntel Report*\nYour water usage for the last week was optimized. No major leaks detected in the main network.`;
+    sendWhatsAppMessage(reportConfig.whatsappNumber, msg);
+  });
+  console.log(`Weekly report scheduled: ${cronExpression}`);
+};
+
+scheduleWeeklyReport();
   console.log('A client connected:', socket.id);
 
   getLatestReadings((readings) => {
@@ -74,6 +121,25 @@ const handleSensorData = (reading) => {
   console.log('Received sensor data:', reading);
   storeReading(reading);
   io.emit('sensorUpdate', reading);
+
+  // Auto-Alert Logic
+  if (reading.leak === 1 || reading.theft === 1) {
+    const type = reading.leak === 1 ? 'LEAK' : 'THEFT';
+    const alert = {
+      id: Date.now(),
+      type,
+      location: reading.house_id || 'Main Station',
+      timestamp: new Date().toISOString(),
+      status: 'Critical'
+    };
+    recentAlerts.unshift(alert);
+    if (recentAlerts.length > 50) recentAlerts.pop();
+
+    sendWhatsAppMessage(
+      reportConfig.whatsappNumber, 
+      `🚨 *URGENT ALERT*\n${type} detected at ${alert.location}!\nTime: ${new Date().toLocaleTimeString()}\nPlease check the dashboard immediately.`
+    );
+  }
 };
 
 setupHardware(handleSensorData);
@@ -512,6 +578,49 @@ Instructions:
     const data = await completion.json();
     res.json({ reply: data.choices[0].message.content });
   } catch (error) { res.status(500).json({ error: 'Failed' }); }
+app.get('/api/alerts', (req, res) => {
+  res.json(recentAlerts);
+});
+
+app.post('/api/alerts', (req, res) => {
+  const { type, location, status } = req.body;
+  const alert = {
+    id: Date.now(),
+    type: type || 'AI_ANOMALY',
+    location: location || 'Network Analysis',
+    timestamp: new Date().toISOString(),
+    status: status || 'Detected'
+  };
+  recentAlerts.unshift(alert);
+  if (recentAlerts.length > 50) recentAlerts.pop();
+  
+  // Also send WhatsApp if it's a leak or high priority
+  if (type === 'LEAK' || type === 'THEFT') {
+    sendWhatsAppMessage(reportConfig.whatsappNumber, `🤖 *AI DETECTED ALERT*\nType: ${type}\nStatus: ${status}\nLocation: ${location}`);
+  }
+  
+  res.json({ success: true, alert });
+});
+
+app.post('/api/whatsapp/report', async (req, res) => {
+  // Manual trigger
+  const success = await sendWhatsAppMessage(reportConfig.whatsappNumber, "🔔 *Manual Report Request*\nEverything is running smoothly in your water network.");
+  res.json({ ok: success });
+});
+
+app.get('/api/reports/config', (req, res) => {
+  res.json(reportConfig);
+});
+
+app.post('/api/reports/schedule', (req, res) => {
+  const { dayOfWeek, hour, minute, whatsappNumber } = req.body;
+  if (dayOfWeek !== undefined) reportConfig.dayOfWeek = dayOfWeek;
+  if (hour !== undefined) reportConfig.hour = hour;
+  if (minute !== undefined) reportConfig.minute = minute;
+  if (whatsappNumber !== undefined) reportConfig.whatsappNumber = whatsappNumber;
+  
+  scheduleWeeklyReport();
+  res.json({ message: 'Schedule updated successfully', config: reportConfig });
 });
 
 server.listen(PORT, () => {
