@@ -47,6 +47,7 @@ export default function ObservatoryDashboard() {
   const soil = Number.isFinite(physicalNode?.soil) ? Number(physicalNode?.soil) : null;
   const soilValue = soil ?? 0;
   const measuredWaterLevel = Number.isFinite(physicalNode?.water_level) ? Number(physicalNode?.water_level) : null;
+  const vibration = physicalNode?.vibration ?? 0;
   const leak = physicalNode?.leak ?? 0;
   const theft = physicalNode?.theft ?? 0;
   const buzzer = physicalNode?.buzzer ?? 0;
@@ -60,7 +61,7 @@ export default function ObservatoryDashboard() {
     (flow2 > 0.05 && flow1 <= Math.max(0.05, flow2 * 0.5));
   const leakDetected = leak === 1 || groqLeakSignal;
   const theftDetected = theft === 1 || groqTheftSignal || halfFlowTheftSignal;
-  const hardwareAlert = !!physicalNode && (humidityValue > 75 || leakDetected || theftDetected || buzzer === 1 || physicalNode.status !== 'Normal');
+  const hardwareAlert = !!physicalNode && (vibration === 1 || humidityValue > 75 || leakDetected || theftDetected || buzzer === 1 || physicalNode.status !== 'Normal');
   const latestDashboardAlerts = alerts.slice(0, 3);
 
   const totals = useMemo(() => {
@@ -399,6 +400,8 @@ export default function ObservatoryDashboard() {
                       ['Flow 2', `${flow2.toFixed(2)} L/m`],
                       ['Humidity', humidity === null ? 'Waiting' : `${humidity.toFixed(0)}%`],
                       ['Soil Moisture', soil === null ? 'Waiting' : `${soil.toFixed(0)}%`],
+                      ['TDS', formatTds(physicalTds)],
+                      ['Vibration', vibration === 1 ? 'Detected' : 'Clear'],
                       ['Leakage', leakDetected ? (groqLeakSignal ? 'Found by Groq' : soilLeakSignal ? 'Found by soil' : 'Found') : 'Clear'],
                       ['Theft', theftDetected ? (halfFlowTheftSignal ? 'Flow meter half drop' : groqTheftSignal ? 'Found by Groq' : soilTheftSignal ? 'Flow loss, dry soil' : 'Found') : 'Clear'],
                     ].map(([label, value]) => (
@@ -511,6 +514,7 @@ export default function ObservatoryDashboard() {
           flow2: flow2.toFixed(2),
           humidity: humidity !== null ? humidity.toFixed(1) : 'N/A',
           soilMoisture: soil !== null ? soil.toFixed(1) : 'N/A',
+          vibration: vibration === 1 ? 'Detected' : 'Clear',
           leak: leak === 1 ? 'DETECTED' : 'Clear',
           theft: theft === 1 ? 'DETECTED' : 'Clear',
           tds: physicalTds,

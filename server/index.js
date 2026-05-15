@@ -4,7 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { initDb, storeReading, getLatestReadings, getReadingHistory, getHouseStats, getRecentAlerts, storeSensorAlert } = require('./db');
-const { setupHardware } = require('./hardware');
+const { getHardwareStatus, setupHardware } = require('./hardware');
 const { getNetworkSnapshot, houses, zones } = require('./network');
 const multer = require('multer');
 const { isHFReady, ingestDocument, searchSimilar } = require('./rag');
@@ -35,6 +35,7 @@ const WHATSAPP_ALERT_COOLDOWN_MS = Number(process.env.WHATSAPP_ALERT_COOLDOWN_MS
 const lastGroqSensorAnalysisAt = new Map();
 const latestGroqReadingByHouse = new Map();
 const lastWhatsAppAlertAt = new Map();
+const behaviorHistoryByHouse = new Map();
 let groqReady = false;
 try {
   require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -81,6 +82,84 @@ const getFlowDropSignals = (reading = {}) => {
   return { flow1, flow2, soil, halfMeterDrop, flowDrop, soilMoistureAlert };
 };
 
+const rememberSensorBehavior = (reading = {}) => {
+  const houseId = reading.house_id || 'unknown';
+  const history = behaviorHistoryByHouse.get(houseId) || [];
+  const nextHistory = [
+    ...history,
+    {
+      at: Date.now(),
+      flow1: Number(reading.flow1 ?? reading.flow_rate ?? 0),
+      flow2: Number(reading.flow2 ?? 0),
+      flowRate: Number(reading.flow_rate ?? 0),
+      soil: Number(reading.soil ?? 0),
+      vibration: Number(reading.vibration ?? 0),
+      tds: Number(reading.tds ?? 0),
+      leak: Number(reading.leak ?? 0),
+      theft: Number(reading.theft ?? 0),
+      status: reading.status || 'Unknown',
+    },
+  ].slice(-12);
+
+  behaviorHistoryByHouse.set(houseId, nextHistory);
+  return nextHistory;
+};
+
+const average = (values) => {
+  const valid = values.filter((value) => Number.isFinite(value));
+  return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : 0;
+};
+
+const analyzeSensorBehavior = (reading = {}, history = []) => {
+  const { flow1, flow2, soil, halfMeterDrop, flowDrop, soilMoistureAlert } = getFlowDropSignals(reading);
+  const previous = history.slice(0, -1);
+  const recent = history.slice(-5);
+  const previousFlow2Average = average(previous.slice(-5).map((item) => item.flow2));
+  const previousFlow1Average = average(previous.slice(-5).map((item) => item.flow1));
+  const currentMismatch = Math.abs(flow1 - flow2);
+  const persistentHalfDrop = recent.length >= 3 && recent.slice(-3).every((item) => {
+    return (
+      (item.flow1 > 0.05 && item.flow2 <= Math.max(0.05, item.flow1 * 0.5)) ||
+      (item.flow2 > 0.05 && item.flow1 <= Math.max(0.05, item.flow2 * 0.5))
+    );
+  });
+  const outputDroppedFromBehavior =
+    previousFlow2Average > 0.2 &&
+    flow2 <= previousFlow2Average * 0.55 &&
+    flow1 >= Math.max(0.05, previousFlow1Average * 0.8);
+  const soilRising = recent.length >= 3 && recent[recent.length - 1].soil >= 55 && recent[0].soil > 0 && recent[recent.length - 1].soil - recent[0].soil >= 15;
+  const repeatedVibration = recent.filter((item) => item.vibration === 1).length >= 2;
+  const highTdsSpike = Number(reading.tds || 0) > 500 && average(previous.slice(-5).map((item) => item.tds)) <= 500;
+
+  return {
+    theftBehavior:
+      reading.theft === 1 ||
+      halfMeterDrop ||
+      persistentHalfDrop ||
+      (soil <= 20 && (flowDrop || outputDroppedFromBehavior || currentMismatch >= 2)),
+    leakBehavior:
+      reading.leak === 1 ||
+      soilMoistureAlert ||
+      (soil >= 55 && (flowDrop || currentMismatch >= 0.3 || soilRising)),
+    flowDropBehavior: flowDrop || outputDroppedFromBehavior,
+    vibrationBehavior: repeatedVibration,
+    tdsBehavior: highTdsSpike,
+    reasons: {
+      theft: persistentHalfDrop
+        ? 'Flow behavior shows repeated half-meter drops, indicating possible theft or bypass tapping.'
+        : outputDroppedFromBehavior
+          ? 'Output flow dropped sharply compared with previous readings while input flow stayed active.'
+          : `Flow meter mismatch detected. Meter readings are ${flow1.toFixed(2)} L/min and ${flow2.toFixed(2)} L/min.`,
+      leak: soilRising
+        ? `Soil moisture increased quickly to ${soil.toFixed(0)}%, indicating possible leakage around the pipe.`
+        : `Soil moisture is ${soil.toFixed(0)}% with abnormal flow behavior, indicating leakage risk.`,
+      flowDrop: `Output flow dropped compared with recent behavior. Meter readings are ${flow1.toFixed(2)} and ${flow2.toFixed(2)} L/min.`,
+      vibration: 'Repeated vibration pulses detected in recent readings.',
+      tds: `TDS rose above safe range to ${Number(reading.tds || 0).toFixed(0)} ppm.`,
+    },
+  };
+};
+
 const sendWhatsAppAlertOnce = async ({ key, sender, reading, reason }) => {
   const now = Date.now();
   const lastSentAt = lastWhatsAppAlertAt.get(key) || 0;
@@ -101,33 +180,35 @@ const sendWhatsAppAlertOnce = async ({ key, sender, reading, reason }) => {
 };
 
 const maybeSendWhatsAppSensorAlerts = (reading = {}) => {
+  const history = rememberSensorBehavior(reading);
+  const behavior = analyzeSensorBehavior(reading, history);
   const { flow1, flow2, soil, halfMeterDrop, flowDrop, soilMoistureAlert } = getFlowDropSignals(reading);
   const houseId = reading.house_id || 'unknown';
 
-  if (reading.theft === 1 || halfMeterDrop || reading.status === 'Water Theft') {
+  if (reading.theft === 1 || halfMeterDrop || reading.status === 'Water Theft' || behavior.theftBehavior) {
     sendWhatsAppAlertOnce({
       key: `${houseId}:theft`,
       sender: sendTheftAlert,
       reading,
-      reason: `Flow meter mismatch detected. Meter readings are ${flow1.toFixed(2)} L/min and ${flow2.toFixed(2)} L/min; one meter is half or less than the other.`,
+      reason: behavior.reasons.theft,
     });
   }
 
-  if (reading.leak === 1 || reading.status === 'Water Leakage') {
+  if (reading.leak === 1 || reading.status === 'Water Leakage' || behavior.leakBehavior) {
     sendWhatsAppAlertOnce({
       key: `${houseId}:leak`,
       sender: sendLeakAlert,
       reading,
-      reason: 'Leakage detected from flow, soil moisture, or AI analysis.',
+      reason: behavior.reasons.leak,
     });
   }
 
-  if (soilMoistureAlert) {
+  if (soilMoistureAlert || behavior.flowDropBehavior) {
     sendWhatsAppAlertOnce({
       key: `${houseId}:soil-flow-drop`,
       sender: sendSoilFlowDropAlert,
       reading,
-      reason: `Soil moisture is ${soil.toFixed(0)}% while output flow dropped below expected flow.`,
+      reason: soilMoistureAlert ? `Soil moisture is ${soil.toFixed(0)}% while output flow dropped below expected flow.` : behavior.reasons.flowDrop,
     });
   } else if (flowDrop && soil > 0) {
     sendWhatsAppAlertOnce({
@@ -135,6 +216,24 @@ const maybeSendWhatsAppSensorAlerts = (reading = {}) => {
       sender: sendSoilFlowDropAlert,
       reading,
       reason: `Output flow dropped compared with input flow. Soil moisture is ${soil.toFixed(0)}%.`,
+    });
+  }
+
+  if (behavior.vibrationBehavior) {
+    sendWhatsAppAlertOnce({
+      key: `${houseId}:vibration`,
+      sender: sendSoilFlowDropAlert,
+      reading,
+      reason: behavior.reasons.vibration,
+    });
+  }
+
+  if (behavior.tdsBehavior) {
+    sendWhatsAppAlertOnce({
+      key: `${houseId}:tds`,
+      sender: sendSoilFlowDropAlert,
+      reading,
+      reason: behavior.reasons.tds,
     });
   }
 };
@@ -321,6 +420,7 @@ const handleSensorData = (reading) => {
     console.warn('[Database] Skipping sensor data until schema is ready.');
     return;
   }
+
   storeReading(reading);
   if (reading.status === 'Normal' && reading.leak !== 1 && reading.theft !== 1) {
     latestGroqReadingByHouse.delete(reading.house_id);
@@ -338,6 +438,10 @@ app.get('/api/status', (req, res) => {
     zones: zones.length,
     generatedAt: new Date().toISOString(),
   });
+});
+
+app.get('/api/hardware/status', (req, res) => {
+  res.json(getHardwareStatus());
 });
 
 app.get('/api/network', (req, res) => {
@@ -709,12 +813,42 @@ app.post('/api/rag/ingest', upload.single('file'), async (req, res) => {
   }
 });
 
+const buildAquaBotFallbackReply = ({ message = '', context = {} } = {}) => {
+  const live = context?.liveReadings || {};
+  const parts = [];
+
+  if (live.status) parts.push(`Status is ${live.status}.`);
+  if (live.flow1 !== undefined || live.flow2 !== undefined) {
+    parts.push(`Flow meters read ${live.flow1 ?? 'N/A'} and ${live.flow2 ?? 'N/A'} L/min.`);
+  }
+  if (live.leak === 'DETECTED' || live.theft === 'DETECTED') {
+    parts.push(`Urgent: ${live.leak === 'DETECTED' ? 'leakage' : 'theft'} is detected. Inspect the line and sensors immediately.`);
+  }
+  if (live.vibration === 'Detected') parts.push('Vibration is currently detected.');
+  if (live.tds !== undefined) parts.push(`TDS is ${live.tds} ppm and water health is ${live.waterHealth ?? 'Unknown'}.`);
+  if (live.soilMoisture !== undefined) parts.push(`Soil moisture is ${live.soilMoisture}%.`);
+
+  if (parts.length > 0) {
+    return parts.slice(0, 4).join(' ');
+  }
+
+  return `I could not reach the AI service right now, but the monitoring backend is online. Ask about flow, leakage, theft, TDS, vibration, or soil moisture after live readings arrive.`;
+};
+
 app.post('/api/aquabot', async (req, res) => {
   if (!groqReady) return res.status(500).json({ error: 'Groq is not configured. Set GROQ_API_KEY in server/.env.' });
-  const { message, context } = req.body;
+  const { message, context } = req.body || {};
+
+  if (!String(message || '').trim()) {
+    return res.status(400).json({ error: 'Message is required.' });
+  }
   try {
-    // RAG Search
-    const relevantChunks = await searchSimilar(message, 3);
+    let relevantChunks = [];
+    try {
+      relevantChunks = await searchSimilar(message, 3);
+    } catch (ragError) {
+      console.warn('[AquaBot] Knowledge search skipped:', ragError.message);
+    }
     const contextFromStore = relevantChunks.length > 0 
       ? `\n\nKnowledge Base:\n${relevantChunks.map((c, i) => `[${i+1}] ${c}`).join('\n')}`
       : '';
@@ -764,12 +898,24 @@ Instructions:
       }),
     });
     if (!completion.ok) {
-      const err = await completion.json().catch(() => ({}));
-      throw new Error(err?.error?.message || 'Groq request failed.');
+      const rawError = await completion.text().catch(() => '');
+      const err = safeParseJson(rawError);
+      throw new Error(err?.error?.message || rawError || 'Groq request failed.');
     }
     const data = await completion.json();
-    res.json({ reply: data.choices[0].message.content });
-  } catch (error) { res.status(500).json({ error: 'Failed' }); }
+    const reply = data?.choices?.[0]?.message?.content;
+    if (!reply) {
+      throw new Error('Groq returned an empty response.');
+    }
+    res.json({ reply });
+  } catch (error) {
+    console.error('[AquaBot] Failed:', error.message);
+    res.json({
+      reply: buildAquaBotFallbackReply({ message, context }),
+      fallback: true,
+      error: error.message || 'AquaBot failed to respond.',
+    });
+  }
 });
 
 server.listen(PORT, () => {

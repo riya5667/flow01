@@ -44,6 +44,8 @@ export default function ArduinoChart({ reading }: ArduinoChartProps) {
   const humidityValue = humidity ?? 0;
   const soil = Number.isFinite(reading?.soil) ? Number(reading?.soil) : null;
   const soilValue = soil ?? 0;
+  const tds = Number.isFinite(reading?.tds) ? Number(reading?.tds) : null;
+  const tdsValue = tds ?? 0;
   const soilLeakSignal = soilValue >= 55;
   const soilTheftSignal = soil !== null && soilValue <= 20 && (reading?.theft ?? 0) === 1;
   const halfFlowTheftSignal =
@@ -62,6 +64,7 @@ export default function ArduinoChart({ reading }: ArduinoChartProps) {
     { label: 'Flow sensor 2', value: `${flow2.toFixed(2)} L/m`, icon: <Droplet size={14} />, alert: flow2 <= 0.05 },
     { label: 'Humidity', value: humidity === null ? 'Waiting' : `${humidity.toFixed(0)}%`, icon: <Gauge size={14} />, alert: humidityValue > 75 },
     { label: 'Soil Moisture', value: soil === null ? 'Waiting' : `${soil.toFixed(0)}%`, icon: <Droplet size={14} />, alert: soilLeakSignal },
+    { label: 'TDS', value: tds === null ? 'Waiting' : `${tds.toFixed(0)} ppm`, icon: <Gauge size={14} />, alert: tdsValue > 500 },
     { label: 'Vibration', value: vibration === 1 ? 'Detected' : 'Clear', icon: <Activity size={14} />, alert: vibration === 1 },
     { label: 'Leakage', value: leak === 1 ? (soilLeakSignal ? 'Soil wet' : 'Found') : 'Clear', icon: <Droplet size={14} />, alert: leak === 1 },
     { label: 'Theft', value: theft === 1 || halfFlowTheftSignal ? (halfFlowTheftSignal ? 'Meter half drop' : soilTheftSignal ? 'Dry soil + flow drop' : 'Found') : 'Clear', icon: <ShieldAlert size={14} />, alert: theft === 1 || halfFlowTheftSignal },
@@ -154,7 +157,7 @@ export default function ArduinoChart({ reading }: ArduinoChartProps) {
           </div>
 
           <div className="grid grid-cols-2 gap-3 text-xs text-slate-400">
-            <div>Serial: FLOW1,FLOW2,HUMIDITY,SOIL,VIBRATION,LEAK,THEFT,BUZZER</div>
+            <div>Serial: FLOW1,FLOW2,HUMIDITY,SOIL,TDS,VIBRATION,LEAK,THEFT,BUZZER</div>
             <div className="text-right">
               Last: {reading?.timestamp ? new Date(reading.timestamp).toLocaleTimeString('en-IN') : 'Waiting'}
             </div>

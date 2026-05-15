@@ -18,6 +18,7 @@ const byte vibrationPin = 4;
 
 const byte humidityPin = A0;
 const byte soilMoisturePin = A1;
+const byte tdsPin = A2;
 
 const byte trigPin = 8;
 const byte echoPin = 9;
@@ -30,6 +31,8 @@ const float tankFullDistanceCm = 4.0;
 
 const int lowWaterLevelPercent = 20;
 const int leakDropThresholdPercent = 5;
+const float tdsTemperatureC = 25.0;
+const int vibrationTriggerLevel = LOW;
 
 // ---------- TIMERS ----------
 unsigned long currentTime = 0;
@@ -101,6 +104,9 @@ void setup() {
   // Soil moisture sensor
   pinMode(soilMoisturePin, INPUT);
 
+  // TDS sensor
+  pinMode(tdsPin, INPUT);
+
   // Ultrasonic
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
@@ -161,9 +167,12 @@ void loop() {
 
     int vibrationDetected = 0;
 
-    // Change HIGH/LOW if reversed
-    if (digitalRead(vibrationPin) == LOW) {
-      vibrationDetected = 1;
+    // Sample several times because vibration sensors often pulse briefly.
+    for (int i = 0; i < 20; i++) {
+      if (digitalRead(vibrationPin) == vibrationTriggerLevel) {
+        vibrationDetected = 1;
+      }
+      delay(1);
     }
 
     // ========================================
@@ -199,6 +208,30 @@ void loop() {
     int soilMoisturePercent = map(soilRaw, 1023, 0, 0, 100);
 
     soilMoisturePercent = constrain(soilMoisturePercent, 0, 100);
+
+    // ========================================
+    // TDS SENSOR
+    // ========================================
+
+    long tdsTotal = 0;
+
+    for (int i = 0; i < 10; i++) {
+      tdsTotal += analogRead(tdsPin);
+      delay(2);
+    }
+
+    int tdsRaw = tdsTotal / 10;
+
+    float tdsVoltage = tdsRaw * (5.0 / 1024.0);
+    float compensationCoefficient = 1.0 + 0.02 * (tdsTemperatureC - 25.0);
+    float compensatedVoltage = tdsVoltage / compensationCoefficient;
+    float tdsPpm =
+      (133.42 * compensatedVoltage * compensatedVoltage * compensatedVoltage -
+       255.86 * compensatedVoltage * compensatedVoltage +
+       857.39 * compensatedVoltage) *
+      0.5;
+
+    tdsPpm = constrain(tdsPpm, 0.0, 2000.0);
 
     // ========================================
     // ULTRASONIC SENSOR
@@ -278,6 +311,12 @@ void loop() {
 
     Serial.print(",SOIL:");
     Serial.print(soilMoisturePercent);
+
+    Serial.print(",TDSRAW:");
+    Serial.print(tdsRaw);
+
+    Serial.print(",TDS:");
+    Serial.print(tdsPpm, 0);
 
     Serial.print(",DISTANCE:");
     Serial.print(distanceCm, 2);

@@ -77,10 +77,13 @@ export default function AquaBot({ context }: { context: any }) {
         body: JSON.stringify({ message: textToSend, context }),
       });
       const data = await res.json();
+      if (!res.ok || !data.reply) {
+        throw new Error(data.error || 'AquaBot did not return a reply.');
+      }
       setLoading(false);
       typewriterEffect(data.reply);
-    } catch (error) {
-      setMessages(prev => [...prev, { role: 'bot', text: 'Sorry, I am having trouble connecting to the network.' }]);
+    } catch (error: any) {
+      setMessages(prev => [...prev, { role: 'bot', text: error?.message || 'Sorry, I am having trouble connecting to the network.' }]);
       setLoading(false);
     }
   }, [loading, context, typewriterEffect]);
