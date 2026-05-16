@@ -181,6 +181,10 @@ export default function ObservatoryDashboard() {
               <FileText size={16} />
               AI Report
             </Link>
+            <Link href="/alerts-reports" className="inline-flex items-center gap-2 rounded-full px-5 py-3 text-[#191919]">
+              <Bell size={16} />
+              Alerts
+            </Link>
             <button
               onClick={() => setActiveTab('footprint')}
               className={`inline-flex items-center gap-2 rounded-full px-5 py-3 transition ${
