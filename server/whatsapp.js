@@ -69,7 +69,11 @@ const sendTextToRecipient = async ({ recipient, body }) => {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const message = payload?.error?.message || `WhatsApp request failed with ${response.status}`;
+    const error = payload?.error || {};
+    const detail = [error.message, error.type, error.code ? `code ${error.code}` : null, error.error_subcode ? `subcode ${error.error_subcode}` : null]
+      .filter(Boolean)
+      .join(' | ');
+    const message = detail || `WhatsApp request failed with ${response.status}`;
     throw new Error(message);
   }
 
